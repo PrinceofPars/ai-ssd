@@ -14,6 +14,7 @@ import common.tests.test_schemas as t_common
 import person1_kv_engine.tests.test_p1_mock as t_p1
 import person2_ssd.tests.test_p2_mock as t_p2
 import person3_system.tests.test_p3_mock_pipeline as t_p3
+import person3_system.tests.test_p3_integration as t_p3_int
 
 
 def run_module_tests(module, module_name):
@@ -44,6 +45,7 @@ def main():
         (t_p1, "Person 1: KV Engine & MockSSD"),
         (t_p2, "Person 2: SSD / FTL & MockKVEngine"),
         (t_p3, "Person 3: Unified API & Mock Pipeline"),
+        (t_p3_int, "Person 3: Physical Storage Adapter & Prefetch Integration"),
     ]
 
     total_passed = 0
