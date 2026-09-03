@@ -23,6 +23,9 @@ wheels/
 .installed.cfg
 *.egg
 
+# Agent Workspaces
+.agents/
+
 # Testing & Coverage
 .pytest_cache/
 .coverage
