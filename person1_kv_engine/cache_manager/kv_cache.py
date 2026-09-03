@@ -1,8 +1,7 @@
-"""
-Paged KV Cache Manager: Coordinates allocation, hot/cold tiering, and SSD offloading.
-"""
+"""Paged KV Cache Manager: Coordinates allocation, hot/cold tiering, and SSD offloading."""
 
 from typing import Dict, List, Tuple, Any, Optional
+import numpy as np
 from common.schemas.kv_block import KVBlock, StorageTier
 from person1_kv_engine.cache_manager.block_manager import BlockManager
 from person1_kv_engine.cache_manager.hot_cold import HotColdClassifier
@@ -32,10 +31,8 @@ class PagedKVCache:
         self.eviction = EvictionPolicy()
         self.ssd_backend = ssd_backend
 
-    def initialize_context(self, context_length: int) -> int:
-        """
-        Populates paged blocks for all layers and heads for a given context length.
-        """
+    def initialize_context(self, context_length: int, attach_tensors: bool = False) -> int:
+        """Populates paged blocks for all layers and heads for a given context length."""
         num_blocks_per_head = (context_length + self.block_tokens - 1) // self.block_tokens
         for layer_id in range(self.layers):
             for head_id in range(self.heads):
@@ -48,12 +45,12 @@ class PagedKVCache:
                         kv_head_start=head_id,
                         kv_head_count=1,
                         tier=StorageTier.GPU.value,
+                        attach_tensors=attach_tensors,
                     )
         return self.block_manager.total_blocks()
 
     def run_offload_pass(self, context_length: int) -> Tuple[int, int]:
-        """
-        Partitions blocks into hot/cold and offloads cold blocks to SSD if available.
+        """Partitions blocks into hot/cold and offloads cold blocks to SSD if available.
         Returns (hot_count, cold_count).
         """
         all_blocks = self.block_manager.all_blocks()
@@ -63,3 +60,13 @@ class PagedKVCache:
             self.eviction.evict_to_ssd(cold, self.ssd_backend)
 
         return len(hot), len(cold)
+
+    def get_host_memory_bytes(self) -> int:
+        """Calculates memory currently resident in GPU/Host RAM."""
+        hot_blocks = [b for b in self.block_manager.all_blocks() if b.storage_tier != StorageTier.SSD.value]
+        return sum(b.total_size_bytes for b in hot_blocks)
+
+    def get_offloaded_memory_bytes(self) -> int:
+        """Calculates memory offloaded to SSD."""
+        cold_blocks = [b for b in self.block_manager.all_blocks() if b.storage_tier == StorageTier.SSD.value]
+        return sum(b.total_size_bytes for b in cold_blocks)

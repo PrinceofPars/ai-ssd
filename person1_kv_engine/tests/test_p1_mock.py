@@ -1,12 +1,21 @@
-# Standard assertion tests compatible with pytest and unittest
+"""Unit tests proving Person 1 module works independently.
+
+Fully compatible with both pytest and python -m unittest.
+"""
+
+import unittest
+import numpy as np
 from person1_kv_engine.mock_ssd import MockSSD
 from person1_kv_engine.cache_manager.kv_cache import PagedKVCache
 from person1_kv_engine.attention.scoring import AttentionScorer
+from person1_kv_engine.attention.attention import AttentionEngine, precompute_rope_frequencies, apply_rotary_pos_emb
 from person1_kv_engine.topk.selector import TopKSelector
+from person1_kv_engine.topk.evaluator import TopKEvaluator
 from person1_kv_engine.baseline.baseline_kv import BaselineKVCache
-from common.schemas.kv_block import StorageTier
+from common.schemas.kv_block import StorageTier, KVBlock
 
 
+# Standalone function tests for pytest compatibility
 def test_baseline_memory_calculation():
     baseline = BaselineKVCache(layers=32, heads=32, head_dim=128, dtype="FP16")
     # 4096 context length: 2 * 32 * 32 * 128 * 4096 * 2 = 2,147,483,648 bytes = 2048 MB
@@ -47,9 +56,8 @@ def test_topk_selection():
     scorer = AttentionScorer(head_dim=128)
     selector = TopKSelector()
 
-    from common.schemas.kv_block import KVBlock
     blocks = [
-        KVBlock.create_default(block_id=i, layer_id=0, token_start=i*16, hotness=0.1 * i)
+        KVBlock.create_default(block_id=i, layer_id=0, token_start=i * 16, hotness=0.1 * i)
         for i in range(10)
     ]
     scores = scorer.score_blocks(blocks)
@@ -58,3 +66,39 @@ def test_topk_selection():
     # Block 9, 8, 7 should be top
     top_ids = [b.block_id for b in top_3]
     assert top_ids == [9, 8, 7]
+
+
+def test_topk_evaluator_recall():
+    recall = TopKEvaluator.calculate_recall([1, 2, 3, 4], [2, 3, 5, 6])
+    assert recall == 0.5
+
+
+def test_rope_orthogonality():
+    cos, sin = precompute_rope_frequencies(head_dim=64, max_seq_len=64)
+    vec = np.random.randn(4, 64).astype(np.float32)
+    norm_before = np.linalg.norm(vec, axis=-1)
+    vec_rot = apply_rotary_pos_emb(vec, cos, sin, pos_offset=10)
+    norm_after = np.linalg.norm(vec_rot, axis=-1)
+    np.testing.assert_allclose(norm_before, norm_after, rtol=1e-5)
+
+
+# Standard unittest wrapper
+class TestPerson1TestSuite(unittest.TestCase):
+    def test_baseline(self):
+        test_baseline_memory_calculation()
+
+    def test_paged_cache(self):
+        test_paged_kv_cache_with_mock_ssd()
+
+    def test_topk(self):
+        test_topk_selection()
+
+    def test_evaluator(self):
+        test_topk_evaluator_recall()
+
+    def test_rope(self):
+        test_rope_orthogonality()
+
+
+if __name__ == "__main__":
+    unittest.main()

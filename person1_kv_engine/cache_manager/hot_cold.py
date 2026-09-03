@@ -1,5 +1,4 @@
-"""
-Hot/Cold Classification: Identifies attention sinks and sliding window tokens as HOT,
+"""Hot/Cold Classification: Identifies attention sinks and sliding window tokens as HOT,
 and older intermediate tokens as COLD candidates for SSD offloading.
 """
 
@@ -18,8 +17,7 @@ class HotColdClassifier:
         self.recent_tokens = recent_tokens
 
     def classify_block(self, block: KVBlock, total_context_tokens: int) -> bool:
-        """
-        Returns True if HOT (should stay in GPU/DRAM), False if COLD (eligible for SSD).
+        """Returns True if HOT (should stay in GPU/DRAM), False if COLD (eligible for SSD).
         - Attention Sinks: Initial tokens [0, sink_tokens)
         - Recent Window: [total_context_tokens - recent_tokens, total_context_tokens)
         """
@@ -42,6 +40,6 @@ class HotColdClassifier:
                 b.hotness = 1.0
                 hot.append(b)
             else:
-                b.hotness = max(0.1, 1.0 - (total_context_tokens - b.token_start) / float(total_context_tokens))
+                b.hotness = max(0.1, 1.0 - (total_context_tokens - b.token_start) / float(max(1, total_context_tokens)))
                 cold.append(b)
         return hot, cold

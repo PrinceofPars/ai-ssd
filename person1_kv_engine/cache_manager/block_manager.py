@@ -1,8 +1,7 @@
-"""
-Block Manager: Responsible for allocating, indexing, and deallocating KVBlocks.
-"""
+"""Block Manager: Responsible for allocating, indexing, and managing KVBlocks."""
 
 from typing import Dict, List, Optional
+import numpy as np
 from common.schemas.kv_block import KVBlock, StorageTier
 from common.constants import DEFAULT_BLOCK_TOKENS, DEFAULT_HEAD_DIM, DEFAULT_DTYPE
 
@@ -28,10 +27,12 @@ class BlockManager:
         kv_head_start: int = 0,
         kv_head_count: int = 1,
         tier: str = StorageTier.GPU.value,
+        attach_tensors: bool = False,
     ) -> KVBlock:
         b_id = self._next_block_id
         self._next_block_id += 1
         cnt = token_count or self.block_tokens
+
         block = KVBlock.create_default(
             block_id=b_id,
             layer_id=layer_id,
@@ -43,6 +44,15 @@ class BlockManager:
             dtype=self.dtype,
             storage_tier=tier,
         )
+
+        if attach_tensors:
+            np_dtype = np.float16 if self.dtype.upper() == "FP16" else np.float32
+            block.k_data = np.zeros((cnt, kv_head_count, self.head_dim), dtype=np_dtype)
+            block.v_data = np.zeros((cnt, kv_head_count, self.head_dim), dtype=np_dtype)
+        else:
+            block.k_data = None
+            block.v_data = None
+
         self._blocks[b_id] = block
         return block
 
@@ -54,3 +64,7 @@ class BlockManager:
 
     def all_blocks(self) -> List[KVBlock]:
         return list(self._blocks.values())
+
+    def clear(self) -> None:
+        self._blocks.clear()
+        self._next_block_id = 0

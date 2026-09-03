@@ -1,1 +1,1 @@
-"""Tests for Person 1 KV Cache engine."""
+"""Test suite package for SanDisk Cerebrum 2026."""
