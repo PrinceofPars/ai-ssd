@@ -186,8 +186,8 @@ In `person1_kv_engine/tiering/hot_cold_classifier.py` and `tiered_kv_manager.py`
 - Each block contains 16 tokens.
 - Key chunk: $16 \times 32 \times 128 \times 2 = 131,072\text{ bytes}$ across all heads, or 4 KB per head.
 - Attention sinks: Tokens $[0, 64)$ are never evicted because attention scores in autoregressive models naturally concentrate on initial delimiter tokens (Xiao et al., StreamingLLM).
-- Sliding window: Tokens $[\text{current\_len} - 512, \text{current\_len})$ capture conversational recency.
-- All tokens between 64 and $(\text{current\_len} - 512)$ are classified as `COLD_SSD`. With 32K tokens, cold tokens account for $>80\%$ of total context.
+- Sliding window: Tokens $[N_{\text{current}} - 512, N_{\text{current}})$ capture conversational recency.
+- All tokens between 64 and $(N_{\text{current}} - 512)$ are classified as `COLD_SSD`. With 32K tokens, cold tokens account for $>80\%$ of total context.
 
 ### 5.3 SIMD In-Storage Dot-Product Scoring
 Implemented in freestanding native C (`person1_kv_engine/c_kernel/instorage_attention.c`):
@@ -221,7 +221,8 @@ $$T_{\text{conv}} = 10.0 + 16 \times (25.0 + 3.33) = 10.0 + 453.28 \approx 490\ 
 
 #### How Tensor-Aware FTL Achieves 7.66× Speedup:
 Tensor-Aware FTL stripes requests uniformly across all 8 channels:
-$$\text{Channel} = (h + \text{token\_block\_idx} + (\text{token\_block\_idx} // C)) \pmod C$$
+$$\text{Channel} = (h + b_{\text{idx}} + (b_{\text{idx}} // C)) \pmod C$$
+where $b_{\text{idx}}$ is the token block index.
 Each channel handles only $N_c = 2$ blocks ($16 / 8 = 2$):
 $$T_{\text{tensor}} = 10.0 + 2 \times (25.0 + 3.33) = 10.0 + 56.66 \approx 70\ \mu\text{s}$$
 $$\text{Speedup} = \frac{490\ \mu\text{s}}{70\ \mu\text{s}} = \mathbf{7.00\times}$$
@@ -244,8 +245,8 @@ This guarantees **exact mathematical equivalence** to standard full-context soft
 Implemented in `person3_system/prefetch/prefetcher.py`:
 In a Transformer, adjacent layers exhibit strong semantic attention locality (attending to identical prompt regions and conversational tokens).
 While the GPU executes Layer $L$ attention ($T_{\text{GPU}} \approx 65\ \mu\text{s}$), the prefetcher issues an asynchronous DMA request for Layer $L+1$ candidate blocks.
-$$\text{Stall Bubble} = \max(0, T_{\text{flash\_retrieval}} - T_{\text{GPU}})$$
-Because $T_{\text{flash\_retrieval}}$ under Tensor-Aware FTL is reduced to $\sim 70\ \mu\text{s}$, the net stall bubble per layer is only $70 - 65 = 5\ \mu\text{s}$.
+$$\text{Stall Bubble} = \max(0, T_{\text{flash}} - T_{\text{GPU}})$$
+Because $T_{\text{flash}}$ under Tensor-Aware FTL is reduced to $\sim 70\ \mu\text{s}$, the net stall bubble per layer is only $70 - 65 = 5\ \mu\text{s}$.
 With a **97.0% prefetch hit rate**, total stall penalty across 32 layers is under $1\text{ ms}$, holding end-to-end latency overhead to **+0.5%**!
 
 ---

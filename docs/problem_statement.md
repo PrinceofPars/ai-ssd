@@ -7,7 +7,7 @@ Large Language Model (LLM) inference consists of two phases:
 
 During autoregressive generation, keys and values of previous tokens are cached to avoid quadratic recomputation. As context lengths scale from 4K to 32K, 64K, or 128K tokens, the memory footprint of the KV cache explodes:
 
-$$\text{KV Cache Size} = 2 \times \text{layers} \times \text{heads} \times \text{head\_dim} \times \text{context\_len} \times \text{bytes\_per\_element}$$
+$$\text{KV Cache Size} = 2 \times \text{layers} \times \text{heads} \times \text{head dim} \times \text{context len} \times \text{bytes per element}$$
 
 For a 32-layer, 32-head, `head_dim=128` model at 32K context with FP16:
 $$\text{Size} = 2 \times 32 \times 32 \times 128 \times 32768 \times 2 \approx 17.18 \text{ GB}$$

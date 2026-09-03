@@ -89,8 +89,9 @@ This document provides a line-by-line, module-by-module breakdown of what each p
    - Demonstrated that contiguous KV block reads cause severe Channel 0 hot-spotting ($N_0 = 16, N_{1..7} = 0$), serializing all reads to $490\ \mu\text{s}$.
 4. **Tensor-Aware FTL Striping Algorithm (`person2_ssd/ftl/tensor_aware.py`)**:
    - Engineered a breakthrough mathematical placement function that maps blocks across channels and dies using tensor coordinates (layer, head, and token block index):
-     $$\text{Channel} = (h + \text{token\_block\_idx} + (\text{token\_block\_idx} // C)) \pmod C$$
-     $$\text{Die} = (L + (h // C) + (\text{token\_block\_idx} // C)) \pmod{\text{dies\_per\_ch}}$$
+     $$\text{Channel} = (h + b_{\text{idx}} + (b_{\text{idx}} // C)) \pmod C$$
+     $$\text{Die} = (L + (h // C) + (b_{\text{idx}} // C)) \pmod{D_{\text{channel}}}$$
+     where $b_{\text{idx}}$ is the token block index and $D_{\text{channel}}$ is dies per channel.
    - Completely balances load across all 8 channels ($N_c = 2$ per channel for 16 blocks), slashing read time from $490\ \mu\text{s}$ down to $70\ \mu\text{s}$!
 5. **Physical Storage Simulator (`person2_ssd/storage_model/io_model.py`)**:
    - Glues the FTL mapping, allocator, and latency model into a unified storage simulator.
