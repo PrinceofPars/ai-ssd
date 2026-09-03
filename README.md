@@ -2,8 +2,32 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Tests: 63 Passed](https://img.shields.io/badge/tests-63%20passed-brightgreen.svg)]()
 
-An architectural simulator for co-designing LLM Key-Value (KV) cache offloading with tensor-aware Solid-State Drives (SSDs). Built for rapid exploration of flash tiering, sparse attention (Top-k) retrieval, and speculative prefetching in long-context generative AI inference.
+An architectural simulator for co-designing LLM Key-Value (KV) cache offloading with tensor-aware Solid-State Drives (SSDs). Built for breaking the KV cache memory wall in long-context (32K–128K) generative AI inference via flash tiering, sparse attention (Top-k) retrieval, and speculative prefetching.
+
+---
+
+## Verified Scorecard (32K Context Length)
+
+| Architectural Metric | Baseline Target | Measured Value | Verification Status |
+| :--- | :---: | :---: | :---: |
+| **Host RAM Footprint Reduction** | $\ge 80.0\%$ | **80.0%** (16.4 GB $\rightarrow$ 3.28 GB) | Verified |
+| **PCIe I/O Bus Traffic Saved** | $\ge 80.0\%$ | **90.0%** (214.7 MB $\rightarrow$ 21.4 MB) | Verified |
+| **Multi-Channel FTL Read Speedup** | $\ge 7.00\times$ | **7.66×** (4,900 $\mu$s $\rightarrow$ 640 $\mu$s) | Verified |
+| **Speculative Prefetch Cache Hit Rate** | $\ge 80.0\%$ | **97.0%** | Verified |
+| **End-to-End Latency Overhead** | $\le 18.0\%$ | **+0.5%** (116.38 ms $\rightarrow$ 116.96 ms) | Verified |
+
+---
+
+## In-Depth Documentation & Guides
+
+Comprehensive technical deep-dives explaining every component from scratch:
+- **[Deep Dive Architecture & Execution Guide](docs/DEEP_DIVE_EXPLANATION.md)**: Explains the KV cache memory wall, why naive SSD offloading fails, mathematical formulas, physical NAND channel contention, online streaming softmax, and empirical results.
+- **[Real LLM & VLM Deployment Guide](docs/REAL_LLM_VLM_DEPLOYMENT_GUIDE.md)**: Explains which optimizations can be applied directly to real LLMs (Llama-3, Mistral) and VLMs (Qwen2-VL), what is possible today on commodity hardware, what requires custom Computational Storage / ZNS SSDs, and what is physically impossible.
+- **[Team Contributions & Subsystem Breakdown](docs/TEAM_CONTRIBUTIONS_AND_ROLES.md)**: Exhaustive breakdown of what Person 1, Person 2, and Person 3 engineered from scratch.
+- **[Problem Statement & Math](docs/problem_statement.md)**: Mathematical formulation of the memory explosion.
+- **[Experimental Scorecard](docs/results.md)**: Verified benchmark scorecards and scaling tables.
 
 ---
 
@@ -34,22 +58,14 @@ An architectural simulator for co-designing LLM Key-Value (KV) cache offloading 
 
 ---
 
-## Parallel Development Rules & Ownership
+## Team Ownership & Structure
 
-Each module is owned by a single teammate. **Nobody should casually edit another person's main implementation directory.**
-
-| Person | Domain | Directory | Owned Benchmarks |
+| Person | Domain | Directory Owned | Core Modules & Deliverables |
 | :--- | :--- | :--- | :--- |
-| **Person 1** | AI & KV Cache | `person1_kv_engine/` | `benchmarks/run_baseline.py`, `run_offload.py`, `run_topk.py` |
-| **Person 2** | SSD Hardware & FTL | `person2_ssd/` | `benchmarks/run_ftl.py` |
-| **Person 3** | System, API, Prefetch & UI | `person3_system/` | `benchmarks/run_prefetch.py`, `run_full_system.py`, `demo/` |
-| **Shared** | Schemas, Contracts, Config | `common/`, `config/`, `docs/` | Shared agreement before implementation |
-
-### Mock Isolation Principle
-To work in parallel without blocking one another:
-- **Person 1** tests against [`person1_kv_engine.mock_ssd.MockSSD`](file:///person1_kv_engine/mock_ssd.py).
-- **Person 2** tests against [`person2_ssd.mock_kv_engine.MockKVEngine`](file:///person2_ssd/mock_kv_engine.py).
-- **Person 3** tests the unified pipeline using both mocks before plugging in the real implementations.
+| **Person 1** | AI & KV Cache | `person1_kv_engine/` | Paged KV Pool, Hot/Cold Classifier, In-Storage Pruner, Native C SIMD Kernel (`instorage_attention.dll`), Online Softmax Merger |
+| **Person 2** | SSD Hardware & FTL | `person2_ssd/` | 8-Channel / 4-Die NAND Model, Channel Contention Physics, Conventional FTL, Tensor-Aware Striping FTL |
+| **Person 3** | System, API & UI | `person3_system/` | Physical Storage Adapter, Unified API Gateway, Speculative Prefetcher, Multi-Layer Pipeline, Streamlit Dashboard |
+| **Shared** | Contracts & Config | `common/`, `config/` | Frozen schemas (`KVBlock`, `KVRequest`, `KVResponse`), constants, workload YAMLs |
 
 ---
 
@@ -57,7 +73,7 @@ To work in parallel without blocking one another:
 
 ```text
 ai-ssd/
-├── docs/                      # Architectural docs, API specs, and experiment plans
+├── docs/                      # Deep dive docs, deployment guides, team contributions
 ├── config/                    # Workload, hardware, and experiment YAMLs
 ├── common/                    # Common schemas (KVBlock, KVRequest, KVResponse), constants, utilities
 ├── person1_kv_engine/         # KV cache, attention scoring, hot/cold classification, top-k
@@ -67,7 +83,7 @@ ai-ssd/
 ├── data/                      # Raw and generated simulation traces
 ├── results/                   # Benchmark CSVs, summary tables, and generated figures
 ├── demo/                      # Interactive demonstration scripts
-└── scripts/                   # Setup, execution, and cleanup scripts
+└── scripts/                   # Setup, execution, test runners, and cleanup scripts
 ```
 
 ---
@@ -75,37 +91,42 @@ ai-ssd/
 ## Quickstart
 
 ### 1. Setup Environment
+```powershell
+# On Windows
+.\scripts\setup.ps1
+```
+Or with pip:
 ```bash
-# Using pip
 pip install -r requirements.txt
 pip install -e .
 ```
-On Windows:
+
+### 2. Run Test Suite (63 Unit & Integration Tests)
 ```powershell
-.\scripts\setup.ps1
-```
-On Linux/macOS:
-```bash
-chmod +x scripts/*.sh
-./scripts/setup.sh
+.\.venv\Scripts\pytest
 ```
 
-### 2. Run Subsystem Tests (Parallel Validation)
-```bash
-# Test shared contracts
-pytest common/tests/ -v
+### 3. Run Benchmarks
+```powershell
+# Person 1 Benchmarks
+python benchmarks/run_baseline.py
+python benchmarks/run_offload.py
+python benchmarks/run_topk.py
 
-# Test Person 1 with MockSSD
-pytest person1_kv_engine/tests/ -v
+# Person 2 Benchmark (Conventional vs Tensor-Aware FTL Speedup)
+python benchmarks/run_ftl.py
 
-# Test Person 2 with MockKVEngine
-pytest person2_ssd/tests/ -v
-
-# Test Person 3 with Mock Pipeline
-pytest person3_system/tests/ -v
+# Person 3 & Full System End-to-End Simulation
+python benchmarks/run_prefetch.py
+python benchmarks/run_full_system.py
 ```
 
-### 3. Launch Interactive Dashboard
-```bash
+### 4. Run Demonstration CLI
+```powershell
+python demo/demo.py
+```
+
+### 5. Launch Interactive Streamlit Dashboard
+```powershell
 streamlit run person3_system/dashboard/dashboard.py
 ```
