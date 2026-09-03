@@ -1,0 +1,15 @@
+# KV Offload Experiment Configuration
+
+experiment_name: "kv_offload"
+
+offload_percentages:
+  - 20
+  - 40
+  - 60
+  - 80
+  - 90
+
+context_length: 32768
+hot_cache_policy: "lru"
+attention_sink_tokens: 64
+recent_window_tokens: 512

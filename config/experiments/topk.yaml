@@ -1,0 +1,14 @@
+# Top-k Sparse Attention Experiment Configuration
+
+experiment_name: "topk_retrieval"
+
+k_percentages:
+  - 1
+  - 5
+  - 10
+  - 20
+  - 50
+
+context_length: 32768
+score_metric: "dot_product"
+evaluate_recall: true

@@ -1,0 +1,12 @@
+# Baseline In-Memory Execution Configuration
+
+experiment_name: "baseline_dense"
+
+workload:
+  context_lengths: [4096, 8192, 16384, 32768]
+  
+policy:
+  offload_enabled: false
+  topk_enabled: false
+  prefetch_enabled: false
+  tier: "GPU"

@@ -1,0 +1,8 @@
+# Prefetch Experiment Configuration
+
+experiment_name: "speculative_prefetch"
+
+prefetch_window_layers: 1
+staging_buffer_mb: 2048
+prediction_policy: "sequential_layer"
+evaluate_pipeline_stall: true

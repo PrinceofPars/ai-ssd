@@ -1,0 +1,18 @@
+# FTL Mapping and Storage Experiment Configuration
+
+experiment_name: "ftl_comparison"
+
+ftl_modes:
+  - "conventional"
+  - "tensor_aware"
+
+read_batch_sizes:
+  - 16
+  - 32
+  - 64
+  - 128
+  - 256
+
+stripe_by: "layer_head"
+gc_threshold_percent: 10
+wear_leveling_enabled: true
