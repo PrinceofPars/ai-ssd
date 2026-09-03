@@ -4,12 +4,12 @@ Evaluates memory reduction and offload percentages (20% to 90%).
 """
 
 import sys
+import csv
 from pathlib import Path
 
 # Ensure project root is in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import pandas as pd
 from person1_kv_engine.baseline.baseline_kv import BaselineKVCache
 
 
@@ -29,19 +29,22 @@ def run_offload_benchmark():
                 "experiment": "offload",
                 "context_length": ctx,
                 "offload_pct": pct,
-                "total_kv_mb": total_mb,
-                "ram_kv_mb": ram_mb,
-                "ssd_kv_mb": ssd_mb,
-                "ttft_ms": 70.0 + (ctx / 1000.0) * 1.8,
-                "tokens_per_sec": 40.0 - (pct / 20.0),
+                "total_kv_mb": round(total_mb, 1),
+                "ram_kv_mb": round(ram_mb, 1),
+                "ssd_kv_mb": round(ssd_mb, 1),
+                "ttft_ms": round(70.0 + (ctx / 1000.0) * 1.8, 2),
+                "tokens_per_sec": round(40.0 - (pct / 20.0), 1),
             })
             print(f"Context: {ctx:5d} | Offload: {pct:2d}% | RAM: {ram_mb:7.1f} MB | SSD: {ssd_mb:7.1f} MB")
 
-    df = pd.DataFrame(rows)
     out_dir = Path("results/raw")
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / "offload_results.csv"
-    df.to_csv(out_file, index=False)
+    if rows:
+        with open(out_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+            writer.writeheader()
+            writer.writerows(rows)
     print(f"Saved offload results to: {out_file}\n")
 
 

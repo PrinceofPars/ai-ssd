@@ -4,12 +4,12 @@ Evaluates I/O traffic reduction and attention recall across sparsity levels.
 """
 
 import sys
+import csv
 from pathlib import Path
 
 # Ensure project root is in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import pandas as pd
 from person1_kv_engine.attention.scoring import AttentionScorer
 from person1_kv_engine.topk.selector import TopKSelector
 from person1_kv_engine.topk.evaluator import TopKEvaluator
@@ -49,15 +49,18 @@ def run_topk_benchmark():
                 "bytes_requested": bytes_req,
                 "bytes_transferred": bytes_transferred,
                 "latency_us": latency_us,
-                "recall": min(0.99, recall),
+                "recall": min(0.99, round(recall, 2)),
             })
             print(f"Context: {ctx:5d} | k: {k:4d} | Req: {bytes_req/(1024*1024):5.1f}MB | Read: {bytes_transferred/(1024*1024):5.1f}MB | Recall: {recall:.2f}")
 
-    df = pd.DataFrame(rows)
     out_dir = Path("results/raw")
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / "topk_results.csv"
-    df.to_csv(out_file, index=False)
+    if rows:
+        with open(out_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+            writer.writeheader()
+            writer.writerows(rows)
     print(f"Saved topk results to: {out_file}\n")
 
 

@@ -4,12 +4,12 @@ Evaluates read latency and channel parallelism across parallel request batch siz
 """
 
 import sys
+import csv
 from pathlib import Path
 
 # Ensure project root is in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import pandas as pd
 from person2_ssd.mock_kv_engine import MockKVEngine
 from person2_ssd.storage_model.io_model import StorageSimulator
 
@@ -39,17 +39,20 @@ def run_ftl_benchmark():
         rows.append({
             "experiment": "ftl_comparison",
             "batch_size": batch_size,
-            "conventional_latency_us": conv_lat,
-            "tensor_aware_latency_us": ta_lat,
+            "conventional_latency_us": round(conv_lat, 1),
+            "tensor_aware_latency_us": round(ta_lat, 1),
             "speedup_x": round(speedup, 2),
         })
         print(f"Batch: {batch_size:3d} blocks | Conventional: {conv_lat:7.1f} us | Tensor-Aware: {ta_lat:7.1f} us | Speedup: {speedup:.2f}x")
 
-    df = pd.DataFrame(rows)
     out_dir = Path("results/raw")
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / "ftl_results.csv"
-    df.to_csv(out_file, index=False)
+    if rows:
+        with open(out_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+            writer.writeheader()
+            writer.writerows(rows)
     print(f"Saved FTL results to: {out_file}\n")
 
 

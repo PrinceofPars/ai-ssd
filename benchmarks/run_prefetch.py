@@ -4,12 +4,12 @@ Measures cache hit rates and prefetch accuracy across layers.
 """
 
 import sys
+import csv
 from pathlib import Path
 
 # Ensure project root is in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import pandas as pd
 from person3_system.prefetch.prefetcher import SpeculativePrefetcher
 
 
@@ -30,14 +30,17 @@ def run_prefetch_benchmark():
             "layer_id": layer,
             "blocks_requested": 16,
             "cache_hit": is_hit,
-            "current_hit_rate": prefetcher.hit_rate,
+            "current_hit_rate": round(prefetcher.hit_rate, 2),
         })
 
-    df = pd.DataFrame(rows)
     out_dir = Path("results/raw")
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / "prefetch_results.csv"
-    df.to_csv(out_file, index=False)
+    if rows:
+        with open(out_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+            writer.writeheader()
+            writer.writerows(rows)
     print(f"Overall Prefetch Hit Rate: {prefetcher.hit_rate * 100:.1f}%")
     print(f"Saved prefetch results to: {out_file}\n")
 
