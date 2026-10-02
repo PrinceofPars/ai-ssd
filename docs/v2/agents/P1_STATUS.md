@@ -11,140 +11,92 @@ Assigned Tmux Session: `p1`
 ## Current Session
 
 Session ID:
-SESSION-P1-PHASE1-DELIVERY
+SESSION-P1-PHASE2-VALIDATION
 
 Started:
 2026-10-02T22:15:00+05:30
 
 Last Updated:
-2026-10-03T00:26:00+05:30
+2026-10-03T01:19:00+05:30
 
 ---
 
 ## Current Milestone
 
-M1 (Phase 1 Execution Complete — Real LLM Engine, KV Blockization, Trace Generation & Top-k Sparse Evaluation)
+M2 (Phase 2 Real KV Trace Contract Validation Complete)
 
 ---
 
 ## Current Task
 
-Phase 1 Complete. Handoff package prepared for P2 (FTL / FEMU) and P3 (Prefetch / System Integration).
+Phase 2 Contract Validation Complete. Verified 100% semantic and structural compatibility between P1 real trace and canonical V2 trace schema. Ready for cross-component replay by P2 and P3.
 
 ---
 
 ## Completed
 
-1. **Reconnaissance & Contract Auditing**:
-   - Verified active tmux session (`p1`), non-empty `$TMUX`, and worktree isolation (`/home/ubuntu/ai-ssd-p1` on `v2/p1-real-llm-kv` at commit `db7e0f8`).
-   - Audited existing V1 synthetic components (`WorkloadGenerator`, `mock_ssd.py`) and identified the need for real CPU causal LLM inference.
-   - Discovered and addressed physical NAND flash page geometry discrepancy in V1 (dividing 16-token FP16 blocks into 2048 bytes K and 2048 bytes V). Formulated `docs/v2/proposals/PROP-001-KV-BLOCK-PAGE-GEOMETRY.md` establishing 4 KiB Key page, 4 KiB Value page, and 8 KiB combined logical block.
-   - Formulated `docs/v2/proposals/PROP-002-KV-ACCESS-TRACE-SCHEMA.md` specifying standard `KVTrace` JSONL format.
+1. **Phase 1 Deliverables (Verified & Intact)**:
+   - Real causal LLM inference engine on CPU (`Qwen/Qwen2.5-0.5B`, 494M parameters, 24 layers, GQA 7:1, `head_dim=64`).
+   - Physical page adapter enforcing 4 KiB Key page, 4 KiB Value page, and 8 KiB logical block.
+   - Native C kernel (`instorage_attention.so` compiled with GCC 11.4 AVX2/FMA, 4.37 GiB/s throughput).
+   - Real long-context trace generated at `/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.jsonl` (4.14 MiB, 7872 events, SHA-256 verified).
+   - Top-k sparse attention evaluation across 1%, 5%, 10%, 20%, 50% sparsity budgets.
 
-2. **Real Model Selection & Resource Budgeting (Phase 1B)**:
-   - Evaluated candidate CPU models under machine constraints (8 vCPUs, 61 GiB RAM).
-   - Selected `Qwen/Qwen2.5-0.5B` (494M parameters, 24 layers, 14 query heads, 2 KV heads with GQA 7:1, `head_dim=64`, RoPE).
-   - Executed in FP32 on CPU within target 4 vCPU core budget (`torch.set_num_threads(4)`), consuming only ~1.95 GiB RAM (3.1% of system memory) and achieving **20.87 tokens/second** generation speed.
-
-3. **Real KV Extraction Engine (Phase 1C)**:
-   - Implemented `RealLLMEngine` (`person1_kv_engine/real_llm/engine.py`).
-   - Extracts genuine layer-by-layer, head-by-head, position-by-position $(K, V)$ activations from HuggingFace `DynamicCache` and attention weight distributions without synthetic data fabrication.
-
-4. **Accurate KV Blockization Adapter (Phase 1D)**:
-   - Implemented `KVBlockAdapter` (`person1_kv_engine/real_llm/block_adapter.py`).
-   - Enforces physical NAND page boundary:
-     * Key page: 16 tokens $\times$ 1 head $\times$ 64 dim $\times$ 4 bytes (FP32) = 4096 bytes (4 KiB = 1 flash page).
-     * Value page: 16 tokens $\times$ 1 head $\times$ 64 dim $\times$ 4 bytes (FP32) = 4096 bytes (4 KiB = 1 flash page).
-     * Combined logical KV block: 8192 bytes (8 KiB = 2 flash pages).
-   - Validates memory buffer sizes programmatically against physical byte geometry.
-   - Categorizes blocks into DRAM (initial attention sinks tokens 0..3, recent window 16 tokens) and SSD cold candidates with salience decay.
-
-5. **Real Storage Access Trace Generation (Phase 1E)**:
-   - Implemented `RealKVTraceGenerator` (`person1_kv_engine/real_llm/trace_generator.py`).
-   - Generated real storage access traces from actual model execution in `/opt/ai-ssd-v2/traces/real_llm/`:
-     * Long-context (703 tokens, 2112 blocks) trace: `trace_qwen2.5_0.5b_context512.jsonl` (4.14 MiB, 7872 events).
-     * Manifest file: `trace_qwen2.5_0.5b_context512.manifest.json`.
-     * SHA-256 Checksum: `8e58da7ba45ffc4a9fa84571c5c9a96250cd58488aa17be01205f282b3b6cab9`.
-   - Records query ID, layer, head, block ID, token range, operation (`PREFILL_WRITE`, `DECODE_READ`, `TOPK_FILTER`, `TOPK_FETCH`), sub-page distinction (`KEY` vs `VALUE`), byte size, tier, and timestamps.
-
-6. **Empirical Top-k Sparse Attention Evaluation (Phase 1F)**:
-   - Implemented `TopKEvaluator` (`person1_kv_engine/real_llm/topk_evaluator.py`).
-   - Evaluated Dense Reference Attention vs In-Storage Top-k Sparse Attention across 1%, 5%, 10%, 20%, 50% sparsity budgets on real 512+ token context.
-   - Measured actual empirical tradeoff frontier:
-     * **1.0% Sparsity**: 90.9% PCIe traffic reduction, 0.7127 cosine similarity, 14.02% attention mass recall.
-     * **5.0% Sparsity**: 86.3% PCIe traffic reduction, 0.8153 cosine similarity, 21.77% attention mass recall.
-     * **10.0% Sparsity**: 81.8% PCIe traffic reduction, 0.8696 cosine similarity, 27.97% attention mass recall.
-     * **20.0% Sparsity**: 72.6% PCIe traffic reduction, 0.9136 cosine similarity, 35.93% attention mass recall.
-     * **50.0% Sparsity**: 45.3% PCIe traffic reduction, 0.9695 cosine similarity, 64.18% attention mass recall.
-   - Proved that 10% is not automatically "zero loss": 20% budget provides the sweet spot (>0.91 similarity, 72.6% PCIe bandwidth reduction).
-
-7. **Native Linux C Kernel Build & Benchmarking (Phase 1G)**:
-   - Resolved Linux shared library loading issue (V1 had committed a Windows PE `.dll` that failed with `invalid ELF header`).
-   - Compiled freestanding `instorage_attention.c` into Linux ELF 64-bit shared object `instorage_attention.so` via GCC 11.4 with `-O3 -mavx2 -mfma -shared -fPIC -std=c99`.
-   - Updated `kernel_binding.py` and `compile_kernel.py` for cross-platform Linux `.so` and Windows `.dll` support.
-   - Benchmarked native kernel vs NumPy reference on EC2 (`native_benchmark.py`):
-     * Numerical error: $\max |C - \text{ref}| = 4.77 \times 10^{-7}$ (Validation PASSED).
-     * Throughput: **4.37 GiB/s** scanning Key blocks.
-     * Results saved to `/opt/ai-ssd-v2/results/native_kernel_benchmark.json`.
-
-8. **Comprehensive Unit Testing (Phase 1H)**:
-   - Implemented `tests/test_p1_real_llm.py` covering byte-size calculation, canonical FP16 geometry, blockization, deterministic inference, trace serialization/deserialization, Top-k vs dense evaluation, and native C kernel numerical accuracy.
-   - All 34 tests in `person1_kv_engine/tests/` passed (100% pass rate).
+2. **Phase 2 Contract Validation & Verification**:
+   - **Trace Semantics**:
+     * Verified all 7,872 events in `/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.jsonl`.
+     * Zero malformed records; strictly contiguous `event_id` sequence (0 .. 7871) and monotonically non-decreasing timestamps.
+     * `PREFILL_WRITE`: 2,112 events (16.50 MB, step 0, `sub_page="BOTH"`, 8192 bytes/event).
+     * `DECODE_READ`: 2,304 events (18.00 MB, steps 1..16, `tier="DRAM"`, `sub_page="BOTH"`, 8192 bytes/event).
+     * `TOPK_FILTER`: 384 events (128.97 MB Key scan in SSD controller, `sub_page="KEY"`, $N_{\text{cands}} \times 4096$ bytes).
+     * `TOPK_FETCH`: 3,072 events (12.00 MB host retrieval, `sub_page="VALUE"`, 4096 bytes/event).
+     * Total simulated I/O traffic: 177,733,632 bytes (~169.50 MB).
+   - **Physical KV Geometry**:
+     * Verified 2 KV heads (KV head 0: 2,856 events, KV head 1: 5,016 events).
+     * `head_dim = 64`, 16 tokens/block.
+     * Key page = $16 \times 1 \times 64 \times 4$ (FP32) = 4,096 bytes (1 physical flash page).
+     * Value page = $16 \times 1 \times 64 \times 4$ (FP32) = 4,096 bytes (1 physical flash page).
+     * Combined block = 8,192 bytes (2 physical flash pages).
+   - **Canonical Contract Compatibility**:
+     * Validated against `common/schemas/trace.py::CanonicalTraceRecord`.
+     * 100% of events (7,872 / 7,872) parse without errors or data truncation.
+     * Dual aliases (`event_id` $\leftrightarrow$ `seq_id`, `step` $\leftrightarrow$ `step_id`, `head_id` $\leftrightarrow$ `kv_head_id`, `byte_size` $\leftrightarrow$ `byte_length`) verified.
+     * Block IDs preserved across range 0 .. 2111 (no collapsing to zero).
+   - **Checksum Integrity**:
+     * SHA-256 computed on trace file matches manifest and `.sha256` file:
+       `8e58da7ba45ffc4a9fa84571c5c9a96250cd58488aa17be01205f282b3b6cab9`.
+   - **Automated Validation Tests**:
+     * Added `scripts/validate_real_trace.py` for standalone trace verification.
+     * Added `person1_kv_engine/tests/test_trace_validation.py` to test suite.
+     * Full test suite: **37 passed in 2.42s** (100% pass rate).
 
 ---
 
-## Working On
+## What Was Changed
 
-Phase 1 handoff documentation and coordination with P2 and P3.
-
----
-
-## Next
-
-1. Coordinate with P2 for replaying `/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.jsonl` through FEMU/FTL channel models.
-2. Coordinate with P3 for integrating real KV block loading into unified system storage interface.
+1. Synchronized `common/schemas/trace.py` and `common/schemas/kv_block.py` with canonical contract definitions.
+2. Added `scripts/validate_real_trace.py` for deep validation of trace records and manifest.
+3. Added `scripts/test_cross_component.py` validating P2/P3 replay mapping.
+4. Added `person1_kv_engine/tests/test_trace_validation.py` covering manifest checksums, metadata, and event semantics.
+5. Updated `docs/v2/STATUS.md` and `docs/v2/agents/P1_STATUS.md`.
 
 ---
 
-## Blockers
+## Dependencies & Next Steps for P2 / P3
 
-None.
-
----
-
-## Dependencies
-
-- P2: FTL mapping & channel latency timing model for end-to-end replay.
-- P3: System integration / prefetching orchestrator consuming real trace.
-
----
-
-## Artifacts Created
-
-- Core Modules:
-  * `person1_kv_engine/real_llm/engine.py`
-  * `person1_kv_engine/real_llm/block_adapter.py`
-  * `person1_kv_engine/real_llm/trace_generator.py`
-  * `person1_kv_engine/real_llm/topk_evaluator.py`
-  * `person1_kv_engine/real_llm/native_benchmark.py`
-  * `person1_kv_engine/real_llm/run_p1_pipeline.py`
-  * `person1_kv_engine/real_llm/run_long_eval.py`
-  * `person1_kv_engine/c_kernel/instorage_attention.so`
-- Tests:
-  * `person1_kv_engine/tests/test_p1_real_llm.py` (all 34 tests passing)
-- Proposals & Research:
-  * `docs/v2/research/REAL_LLM_KV_RESEARCH.md`
-  * `docs/v2/proposals/PROP-001-KV-BLOCK-PAGE-GEOMETRY.md`
-  * `docs/v2/proposals/PROP-002-KV-ACCESS-TRACE-SCHEMA.md`
-- Shared Traces & Results:
-  * `/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.jsonl`
-  * `/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.manifest.json`
-  * `/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.sha256`
-  * `/opt/ai-ssd-v2/results/p1_real_llm_experiment.json`
-  * `/opt/ai-ssd-v2/results/native_kernel_benchmark.json`
+- **P2 (FTL / FEMU)**:
+  * Trace path to replay: `/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.jsonl`.
+  * Ensure glob pattern matches `*.jsonl` (not `*.json`) to avoid reading `.manifest.json`.
+  * Use `CanonicalTraceRecord` or alias mappings: `is_write` for `PREFILL_WRITE`, `is_read` for `DECODE_READ` / `TOPK_FETCH` / `TOPK_FILTER`.
+  * Multi-channel striping should map the 2 KV heads + block IDs across channels.
+- **P3 (System Integration / Prefetch)**:
+  * Ingest trace via `TraceReader` using `CanonicalTraceRecord.from_dict()`.
+  * Respect `byte_size` (4,096 B for sub-page reads, 8,192 B for combined block writes) in `AnalyticalFTLBackend`.
 
 ---
 
-## Last Commit
+## Test Results
 
-db7e0f8 (aligned with shared V2 baseline). Ready for focused commit.
+- `pytest person1_kv_engine/tests/`: **37 passed in 2.42s** (100% pass rate).
+- Standalone validation script: `python scripts/validate_real_trace.py`: **ALL CHECKS PASSED (100% COMPLIANT)**.
+- Cross-component replay script: `python scripts/test_cross_component.py`: **PASSED (100% Consistent)**.
