@@ -18,155 +18,99 @@ Worktree:
 
 ## Current State
 
-PHASES 3A - 3J COMPLETE & INTEGRATION READY
+PHASE 2 — REAL TRACE CONTRACT & CROSS-COMPONENT INTEGRATION COMPLETE
 
 ---
 
 ## Current Session
 
 Session ID:
-S02-V2-INTEGRATION
+S03-V2-PHASE2-REPAIR
 
 Started:
-2026-10-02T22:35:48+05:30
+2026-10-03T00:30:00+05:30
 
 Last Updated:
-2026-10-03T00:06:00+05:30
+2026-10-03T01:30:00+05:30
 
 ---
 
 ## Current Milestone
 
-M1: V2 System Integration, Storage Abstraction, Prefetch, and Ablation Harness
+M2: Cross-Component Trace & FTL Integration
 
 ---
 
 ## Current Task
 
-Phase 3A-3J Implementation & Full Verification
+Phase 2: Real Trace Contract, TraceReader Overhaul, Tensor-Aware FTL Integration, and End-to-End Verification
 
 ---
 
 ## Completed
 
-- **Phase 3A (Reconnaissance)**:
-  - Attached to assigned tmux session `p3` in `/home/ubuntu/ai-ssd-p3`.
-  - Audited hardware (8 vCPUs, 61 GiB RAM) and tooling (Linux 6.5, Python 3.10.12, fio, qemu, kvm).
-  - Audited V1 codebase; documented mock code, synthetic assumptions, and gap analysis in `docs/v2/research/V1_AUDIT_FINDINGS.md`.
-- **Phase 3B (Storage Backend Abstraction)**:
-  - Built `StorageBackend` abstract base class with synchronous and asynchronous semantics (`person3_system/storage/backend.py`).
-  - Implemented `MockStorageBackend` for deterministic unit testing.
-  - Implemented `FileStorageBackend` supporting POSIX pread/pwrite and direct I/O (`O_DIRECT`).
-  - Implemented `AnalyticalFTLBackend` wrapping P2 `StorageSimulator` in conventional and tensor-aware multi-channel modes.
-- **Phase 3C (I/O Engine Investigation)**:
-  - Evaluated POSIX sync, direct I/O, libaio, threadpool user-space async, and io_uring.
-  - Documented findings and architectural selection rationale in `docs/v2/research/IO_ENGINES.md`.
-- **Phase 3D (Trace Consumption)**:
-  - Built strict schema-validated `TraceReader` in `person3_system/trace/trace_reader.py`.
-  - Enforces schema versioning (`v2.0`), model metadata, boundary checks, monotonically increasing `seq_id`, and explicit error rejection.
-  - Implemented `SyntheticTraceGenerator` for early Stage 1 testing pending P1 production traces.
-- **Phase 3E (Prefetch)**:
-  - Implemented `V2Prefetcher` with rigorous accounting for prefetch requests, useful prefetches, useless prefetches (cache pollution), late prefetches, extra bytes read, and memory consumption.
-  - Strictly charges all prefetch reads against the storage subsystem (no hidden I/O).
-- **Phase 3F (Experiment Runner)**:
-  - Implemented `ExperimentRunner` with automatic `EnvironmentProvenance` capture (git commit, hostname, CPU, RAM, OS, Python/package versions).
-  - Serializes machine-readable outputs in JSON, JSONL, and CSV to `/opt/ai-ssd-v2/results/` and `results/raw/`.
-- **Phase 3G (Required Baselines & Ablations)**:
-  - Built automated harness for all 5 mandatory baselines:
-    1. Dense DRAM Baseline
-    2. KV Offload with Conventional FTL (Dense Read)
-    3. Conventional FTL with Top-k
-    4. Tensor-Aware FTL with Top-k
-    5. Tensor-Aware FTL + Top-k + Speculative Prefetch
-- **Phase 3H (Metrics)**:
-  - Formulated clean metric separation: Model Quality, Compute, Storage, Prefetch, and System performance.
-- **Phase 3I (Integration Harness)**:
-  - Verified Stage 1 (Synthetic trace -> Mock storage -> P3 runner) and Stage 2 (Trace -> Analytical FTL -> P3 runner) in `test_v2_integration_stages.py`.
-  - Built CLI evaluation runner `benchmarks/run_v2_eval.py`.
-- **Phase 3J (Testing)**:
-  - 24/24 unit and integration tests passing in `person3_system/tests/` in 9.25 seconds.
+- **Canonical Shared Trace Contract (`common/schemas/trace.py`)**:
+  - Implemented `CanonicalTraceRecord` supporting transparent aliasing between P1 real production traces and P3 synthetic readers: `event_id`/`seq_id`, `step`/`step_id`, `head_id`/`kv_head_id`, `byte_size`/`byte_length`, `sub_page`.
+  - Codified explicit operation semantics in `TraceOperation`: `PREFILL_WRITE`, `DECODE_READ`, `TOPK_FILTER`, `TOPK_FETCH`, `KV_PREFETCH`, `KV_EVICT`.
+  - Defined `TraceManifest` schema for auto-discovering `<trace_stem>.manifest.json`.
+- **KV Physical Dimensions Codified (`common/schemas/kv_block.py`)**:
+  - Codified physical constants: `KEY_PAGE_BYTES = 4096`, `VALUE_PAGE_BYTES = 4096`, `LOGICAL_BLOCK_BYTES = 8192`.
+  - Defined `SubPageType`: `KEY`, `VALUE`, `BOTH`.
+- **TraceReader Overhaul (`person3_system/trace/trace_reader.py`)**:
+  - Enabled auto-discovery and loading of associated `.manifest.json`.
+  - Consumes JSONL traces directly without requiring synthetic header records.
+  - Strict validation of monotonic `event_id`, layer boundaries, and operation validity.
+  - Explicitly rejects interpreting a `.manifest.json` as a trace file.
+- **AnalyticalFTLBackend Sizing & P2 Integration (`person3_system/storage/analytical_backend.py`)**:
+  - Eliminated hardcoded 4096-byte default: correctly handles explicit request length (8,192 B for combined K+V, 335,872 B for batch Key filter).
+  - Integrated directly with P2's canonical `DeterministicTensorMapper` (`person2_ssd/kv_allocator/tensor_mapping.py`).
+  - Added telemetry accounting for `channel_access_counts`, `channel_bytes`, `operation_counts`, `k_bytes`, `v_bytes`, `combined_bytes`.
+- **Storage Subsystem Ergonomics (`person3_system/storage/backend.py`)**:
+  - Added `submit(request: StorageRequest) -> StorageResult` and `get_stats() -> Dict[str, Any]`.
+- **End-to-End Test Suite (`tests/test_end_to_end_real_pipeline.py`)**:
+  - Validates full pipeline using real P1 trace (`/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.jsonl`):
+    - All 7,872 events consumed (0 dropped).
+    - Preserves operations: 3,072 `TOPK_FETCH`, 2,304 `DECODE_READ`, 2,112 `PREFILL_WRITE`, 384 `TOPK_FILTER`.
+    - Total bytes transferred: 177,733,632 B (169.50 MB).
+    - Total Key bytes: 147,062,784 B (128,974,848 pure Key filter + 18,087,936 combined Key).
+    - Total Value bytes: 30,670,848 B (12,582,912 pure Value fetch + 18,087,936 combined Value).
+    - Combined K+V bytes: 36,175,872 B (4,416 blocks × 8,192 B).
+    - Multi-channel distribution: all 8 channels active and balanced (each channel handles 12.3% - 12.6% of requests).
+    - Manifest rejection test: verifies that `.manifest.json` cannot be parsed as a trace file.
+- **Test Suite Execution**:
+  - 26/26 tests passing across `person3_system/tests/` and `tests/test_end_to_end_real_pipeline.py`.
+- **Standalone Replay Benchmark (`benchmarks/run_real_trace_eval.py`)**:
+  - Added standalone benchmark script reporting complete execution metrics and channel distribution.
 
 ---
 
 ## Working On
 
-Ready for end-to-end integration handoff with P1 (real LLM traces) and P2 (executable FEMU storage).
-
----
-
-## Next
-
-- Consume real P1 traces once deposited in `/opt/ai-ssd-v2/traces/real_llm/`.
-- Wire P2 FEMU/NVMe block device into `NVMeStorageBackend` when available.
+Ready for Phase 3: Hardware-in-the-loop FEMU / NVMe driver integration and live QEMU benchmarking with P2.
 
 ---
 
 ## Blockers
 
-None. Full synthetic & analytical pipeline is independently executable and verified.
+None. Cross-component trace contracts and integration layers are verified.
 
 ---
 
 ## Dependencies
 
-- P1 real LLM traces: `/opt/ai-ssd-v2/traces/real_llm/`
-- P2 executable FEMU NVMe block device: `/dev/nvme*` or raw disk image.
-
----
-
-## Artifacts Created
-
-- `person3_system/storage/` (StorageBackend, MockStorageBackend, FileStorageBackend, AnalyticalFTLBackend)
-- `person3_system/trace/` (TraceReader, TraceHeader, TraceRecord, SyntheticTraceGenerator)
-- `person3_system/prefetch/v2_prefetcher.py` (V2Prefetcher with rigorous accounting)
-- `person3_system/experiments/` (ExperimentRunner, EnvironmentProvenance, ExperimentConfig, ExperimentResult)
-- `benchmarks/run_v2_eval.py` (Full evaluation CLI)
-- `docs/v2/research/V1_AUDIT_FINDINGS.md`
-- `docs/v2/research/IO_ENGINES.md`
-- `/opt/ai-ssd-v2/results/experiment_results.{json, jsonl, csv}`
+- P1 trace artifact: `/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.jsonl` (consumed and verified).
+- P2 tensor mapping: `person2_ssd/kv_allocator/tensor_mapping.py` (integrated and verified).
 
 ---
 
 ## Tests
 
-24 passing tests in `person3_system/tests/`:
-- `test_storage_backend.py` (5 tests)
-- `test_trace_reader.py` (5 tests)
-- `test_v2_prefetcher.py` (2 tests)
-- `test_experiment_runner.py` (2 tests)
-- `test_v2_integration_stages.py` (2 tests)
-- `test_p3_integration.py` (6 tests)
-- `test_p3_mock_pipeline.py` (2 tests)
-
----
-
-## Benchmarks
-
-Ablation evaluation executed via `python3 benchmarks/run_v2_eval.py --context-length 4096 --steps 5`:
-- Dense DRAM Baseline: 0.0% RAM reduction, 10.4 ms, 480.8 tok/s
-- KV Offload Dense Conv: 80.0% RAM reduction, 5,094 reads, 164.8 ms, 30.3 tok/s
-- Conv FTL + Top-k: 80.0% RAM reduction, 477 reads, 26.3 ms, 190.0 tok/s
-- Tensor-Aware FTL + Top-k: 80.0% RAM reduction, 477 reads, 16.8 ms, 297.6 tok/s (2.48x FTL speedup)
-- Tensor-Aware FTL + Top-k + Prefetch: 80.0% RAM reduction, 99.2% prefetch hit rate, 10.4 ms, 480.8 tok/s (matches Dense DRAM speed while offloading 80% KV cache to storage).
-
----
-
-## Decisions
-
-- DECISION-P3-001: Abstract StorageBackend decoupling FTL and flash physical layers from orchestrator and prefetch.
-- DECISION-P3-002: Direct I/O and user-space threadpool async adopted for reproducible NVMe latency without OS page-cache masking.
-- DECISION-P3-003: Strict trace validation rejecting malformed records rather than silent repair.
-- DECISION-P3-004: All prefetch I/O explicitly counted in storage telemetry; hit rate measured against real demand access.
-
----
-
-## Research
-
-- `docs/v2/research/V1_AUDIT_FINDINGS.md`
-- `docs/v2/research/IO_ENGINES.md`
-
----
-
-## Handoff Notes
-
-P3 system integration layer is complete, modular, and fully tested. Ready to link with P1 and P2 components.
+26 passing tests:
+- `tests/test_end_to_end_real_pipeline.py` (2 tests, 100% pass)
+- `person3_system/tests/test_storage_backend.py` (5 tests)
+- `person3_system/tests/test_trace_reader.py` (5 tests)
+- `person3_system/tests/test_v2_prefetcher.py` (2 tests)
+- `person3_system/tests/test_experiment_runner.py` (2 tests)
+- `person3_system/tests/test_v2_integration_stages.py` (2 tests)
+- `person3_system/tests/test_p3_integration.py` (6 tests)
+- `person3_system/tests/test_p3_mock_pipeline.py` (2 tests)

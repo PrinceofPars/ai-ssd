@@ -13,16 +13,16 @@ SYSTEM INTEGRATION / STORAGE API / PREFETCH / EXPERIMENTS
 # Current Session
 
 Session:
-S02-V2-INTEGRATION
+S03-V2-PHASE2-REPAIR
 
 Started:
-2026-10-02T22:35:48+05:30
+2026-10-03T00:30:00+05:30
 
 Last Refresh:
-2026-10-03T00:06:00+05:30
+2026-10-03T01:30:00+05:30
 
 Current State:
-PHASES 3A - 3J COMPLETE & VERIFIED
+PHASE 2 REAL TRACE CONTRACT & CROSS-COMPONENT INTEGRATION COMPLETE
 
 ---
 
@@ -36,10 +36,7 @@ COMPLETE
 Completed:
 - Verified tmux session 'p3' and activated '.venv'.
 - Merged upstream V2 initialization commit into branch 'v2/p3-system-integration'.
-- Conducted environment hardware & software reconnaissance:
-  - 8 vCPUs, 61 GiB RAM, 189 GiB available disk space.
-  - Linux 6.5.0-1020-aws x86_64, Python 3.10.12.
-- Inspected V2 documentation and existing codebase.
+- Conducted environment hardware & software reconnaissance.
 
 ## Session 002 (Phases 3A - 3J: System Integration Implementation)
 
@@ -47,41 +44,41 @@ Status:
 COMPLETE
 
 Completed:
-- **Phase 3A**: Audited V1 mock code, synthetic assumptions (e.g. 97% prefetch hit rate artifact), and missing interfaces. Documented in `docs/v2/research/V1_AUDIT_FINDINGS.md`.
-- **Phase 3B**: Designed and built clean `StorageBackend` abstraction layer with `MockStorageBackend`, `FileStorageBackend` (direct I/O support), and `AnalyticalFTLBackend` (multi-channel striping simulation).
-- **Phase 3C**: Investigated Linux I/O engines (sync, direct I/O, libaio, io_uring, threadpool async). Documented selection rationale in `docs/v2/research/IO_ENGINES.md`.
-- **Phase 3D**: Implemented `TraceReader` enforcing strict schema validation (`v2.0`), layer/head boundary checks, monotonic sequence IDs, and explicit corruption error rejection. Created `SyntheticTraceGenerator`.
-- **Phase 3E**: Built `V2Prefetcher` with rigorous accounting (useful, useless, late prefetches, extra bytes read, and storage I/O billing).
-- **Phase 3F & 3G**: Created `ExperimentRunner` capturing full machine provenance (`EnvironmentProvenance`) and running all 5 required system baselines/ablations.
-- **Phase 3H**: Established clean metric separation across Model Quality, Compute, Storage, Prefetch, and System performance.
-- **Phase 3I**: Implemented multi-stage integration tests (`test_v2_integration_stages.py`) and CLI evaluation runner (`benchmarks/run_v2_eval.py`).
-- **Phase 3J**: Added and verified 24/24 unit/integration tests passing in `person3_system/tests/`.
-- Verified machine-readable exports in JSON, JSONL, and CSV to `/opt/ai-ssd-v2/results/` and `results/raw/`.
+- Built `StorageBackend` abstraction layer (Mock, File Direct I/O, Analytical FTL).
+- Investigated Linux I/O engines and documented findings in `docs/v2/research/IO_ENGINES.md`.
+- Implemented `TraceReader`, `SyntheticTraceGenerator`, and `V2Prefetcher`.
+- Implemented `ExperimentRunner` and 5 baseline ablation evaluations.
+- Verified machine-readable exports in JSON, JSONL, and CSV to `/opt/ai-ssd-v2/results/`.
+
+## Session 003 (Phase 2: Real Trace Contract + Integration Repair)
+
+Status:
+COMPLETE
+
+Completed:
+- Resolved Blocker 2: Authored canonical trace contract (`common/schemas/trace.py`) with support for both P1 real traces and P3 synthetic aliases (`event_id`/`seq_id`, `step`/`step_id`, `byte_size`/`byte_length`, `sub_page`).
+- Resolved Blocker 4: Codified KV physical sizing (`common/schemas/kv_block.py`: 4096 B Key, 4096 B Value, 8192 B combined).
+- Overhauled `TraceReader` to auto-discover `.manifest.json` files and parse raw JSONL event streams.
+- Updated `AnalyticalFTLBackend` to respect explicit request sizes and directly integrate with P2's canonical `DeterministicTensorMapper` (`person2_ssd/kv_allocator/tensor_mapping.py`).
+- Added `tests/test_end_to_end_real_pipeline.py` testing the complete pipeline against P1's real Qwen2.5-0.5B trace (7,872 events, 177.73 MB).
+- Added `benchmarks/run_real_trace_eval.py` CLI benchmark.
+- Verified 26/26 tests passing in under 5 seconds.
+- Updated documentation in `docs/v2/CONTRACTS.md`, `docs/v2/DECISIONS.md`, `docs/v2/STATUS.md`, and agent tracking files.
 
 Files Changed:
-- `person3_system/storage/`
-- `person3_system/trace/`
-- `person3_system/prefetch/v2_prefetcher.py`
-- `person3_system/experiments/`
-- `benchmarks/run_v2_eval.py`
-- `person3_system/tests/` (added 16 new focused tests)
-- `docs/v2/research/V1_AUDIT_FINDINGS.md`
-- `docs/v2/research/IO_ENGINES.md`
+- `common/schemas/trace.py` (new)
+- `common/schemas/kv_block.py`
+- `common/schemas/__init__.py`
+- `person2_ssd/kv_allocator/tensor_mapping.py` (new)
+- `person2_ssd/kv_allocator/__init__.py`
+- `person3_system/storage/analytical_backend.py`
+- `person3_system/storage/backend.py`
+- `person3_system/trace/trace_reader.py`
+- `person3_system/trace/__init__.py`
+- `tests/test_end_to_end_real_pipeline.py` (new)
+- `benchmarks/run_real_trace_eval.py` (new)
+- `docs/v2/CONTRACTS.md`
+- `docs/v2/DECISIONS.md`
+- `docs/v2/STATUS.md`
 - `docs/v2/agents/P3_STATUS.md`
 - `docs/v2/agents/P3_USAGE.md`
-
-Commit:
-Pending commit for Phases 3A-3J.
-
----
-
-# Resource Notes
-
-CPU:
-8 vCPUs (Intel Xeon / AWS EC2), P3 target ~1 core observed.
-
-RAM:
-61 GiB total (~56 GiB free).
-
-Disk:
-Outputs stored in `/opt/ai-ssd-v2/results/`.

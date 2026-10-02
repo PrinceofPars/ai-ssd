@@ -80,6 +80,10 @@ class StorageBackend(ABC):
         """Synchronously write bytes to a block."""
         pass
 
+    def submit(self, request: StorageRequest) -> StorageResult:
+        """Submit a single storage request."""
+        return self.submit_batch([request])[0]
+
     def submit_batch(self, requests: List[StorageRequest]) -> List[StorageResult]:
         """
         Submit a batch of storage requests. Backends may optimize batching
@@ -163,6 +167,13 @@ class StorageBackend(ABC):
             return res
 
         return self._executor.submit(_task)
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Convenience alias for telemetry with aggregate totals."""
+        t = self.get_telemetry()
+        t["total_requests"] = t.get("total_reads", 0) + t.get("total_writes", 0)
+        t["total_bytes"] = t.get("bytes_read", 0) + t.get("bytes_written", 0)
+        return t
 
     def get_telemetry(self) -> Dict[str, Any]:
         """Return backend telemetry counters."""
