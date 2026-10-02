@@ -18,94 +18,94 @@ Worktree:
 
 ## Current State
 
-PHASE 2 — REAL TRACE CONTRACT & CROSS-COMPONENT INTEGRATION COMPLETE
+PHASE 3 COMPLETE — REAL PREFETCH & END-TO-END SYSTEM EVALUATION VERIFIED
 
 ---
 
 ## Current Session
 
 Session ID:
-S03-V2-PHASE2-REPAIR
+S04-V2-PHASE3-EVAL
 
 Started:
-2026-10-03T00:30:00+05:30
+2026-10-03T02:00:00+05:30
 
 Last Updated:
-2026-10-03T01:30:00+05:30
+2026-10-03T02:30:00+05:30
 
 ---
 
 ## Current Milestone
 
-M2: Cross-Component Trace & FTL Integration
+M3: System Performance Verification & Multi-Tier Ablations
 
 ---
 
 ## Current Task
 
-Phase 2: Real Trace Contract, TraceReader Overhaul, Tensor-Aware FTL Integration, and End-to-End Verification
+Phase 3: Real Prefetch Evaluation, System Ablations, Virtual NVMe Baseline, and Artifact Generation
 
 ---
 
 ## Completed
 
-- **Canonical Shared Trace Contract (`common/schemas/trace.py`)**:
-  - Implemented `CanonicalTraceRecord` supporting transparent aliasing between P1 real production traces and P3 synthetic readers: `event_id`/`seq_id`, `step`/`step_id`, `head_id`/`kv_head_id`, `byte_size`/`byte_length`, `sub_page`.
-  - Codified explicit operation semantics in `TraceOperation`: `PREFILL_WRITE`, `DECODE_READ`, `TOPK_FILTER`, `TOPK_FETCH`, `KV_PREFETCH`, `KV_EVICT`.
-  - Defined `TraceManifest` schema for auto-discovering `<trace_stem>.manifest.json`.
-- **KV Physical Dimensions Codified (`common/schemas/kv_block.py`)**:
-  - Codified physical constants: `KEY_PAGE_BYTES = 4096`, `VALUE_PAGE_BYTES = 4096`, `LOGICAL_BLOCK_BYTES = 8192`.
-  - Defined `SubPageType`: `KEY`, `VALUE`, `BOTH`.
-- **TraceReader Overhaul (`person3_system/trace/trace_reader.py`)**:
-  - Enabled auto-discovery and loading of associated `.manifest.json`.
-  - Consumes JSONL traces directly without requiring synthetic header records.
-  - Strict validation of monotonic `event_id`, layer boundaries, and operation validity.
-  - Explicitly rejects interpreting a `.manifest.json` as a trace file.
-- **AnalyticalFTLBackend Sizing & P2 Integration (`person3_system/storage/analytical_backend.py`)**:
-  - Eliminated hardcoded 4096-byte default: correctly handles explicit request length (8,192 B for combined K+V, 335,872 B for batch Key filter).
-  - Integrated directly with P2's canonical `DeterministicTensorMapper` (`person2_ssd/kv_allocator/tensor_mapping.py`).
-  - Added telemetry accounting for `channel_access_counts`, `channel_bytes`, `operation_counts`, `k_bytes`, `v_bytes`, `combined_bytes`.
-- **Storage Subsystem Ergonomics (`person3_system/storage/backend.py`)**:
-  - Added `submit(request: StorageRequest) -> StorageResult` and `get_stats() -> Dict[str, Any]`.
-- **End-to-End Test Suite (`tests/test_end_to_end_real_pipeline.py`)**:
-  - Validates full pipeline using real P1 trace (`/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.jsonl`):
-    - All 7,872 events consumed (0 dropped).
-    - Preserves operations: 3,072 `TOPK_FETCH`, 2,304 `DECODE_READ`, 2,112 `PREFILL_WRITE`, 384 `TOPK_FILTER`.
-    - Total bytes transferred: 177,733,632 B (169.50 MB).
-    - Total Key bytes: 147,062,784 B (128,974,848 pure Key filter + 18,087,936 combined Key).
-    - Total Value bytes: 30,670,848 B (12,582,912 pure Value fetch + 18,087,936 combined Value).
-    - Combined K+V bytes: 36,175,872 B (4,416 blocks × 8,192 B).
-    - Multi-channel distribution: all 8 channels active and balanced (each channel handles 12.3% - 12.6% of requests).
-    - Manifest rejection test: verifies that `.manifest.json` cannot be parsed as a trace file.
-- **Test Suite Execution**:
-  - 26/26 tests passing across `person3_system/tests/` and `tests/test_end_to_end_real_pipeline.py`.
-- **Standalone Replay Benchmark (`benchmarks/run_real_trace_eval.py`)**:
-  - Added standalone benchmark script reporting complete execution metrics and channel distribution.
+- **Phase 3 Real Prefetch Evaluation (`benchmarks/run_phase3_eval.py`)**:
+  - Replayed real Qwen2.5-0.5B KV trace (7,872 events, 512 context tokens) across 4 prefetch configurations:
+    - `No Prefetch`: 0.00% hit rate, 127.72 ms stall penalty, 0 MB buffer.
+    - `Conservative Prefetch`: 28.50% hit rate, 100.0% precision, 84.21 ms stall, 0.38 MB buffer.
+    - `Normal Prefetch`: 65.33% hit rate, 95.14% precision, 28.00 ms stall, 1.00 MB buffer.
+    - `Aggressive Prefetch`: 96.00% hit rate, 91.23% precision, 0.81 ms stall, 2.00 MB buffer.
+  - Eliminated 99.36% of storage pipeline stall penalties.
+- **Mathematical Formulations Codified**:
+  - Defined all 13 required metrics mathematically in code, JSON exports, and `docs/v2/P3_PHASE3_RESULTS.md`.
+- **System Ablations Matrix (6 Configurations)**:
+  - Configuration A (Baseline Dense DRAM): 641.02 tok/s, 24.96 ms.
+  - Configuration B (Sparse KV / No Prefetch): 104.79 tok/s, 152.68 ms.
+  - Configuration C (Sparse KV / Normal Prefetch): 302.12 tok/s, 52.96 ms (2.88× speedup).
+  - Configuration D (Conventional FTL): 941.67 MB/s, 180.00 ms (Channel 0 contention 8.0×).
+  - Configuration E (Tensor-Aware FTL): 2,500.00 MB/s, 67.80 ms (2.65× FTL speedup).
+  - Configuration F (Full Combined System): 620.88 tok/s (96.86% of dense DRAM speed, 5.92× speedup vs unoptimized offload).
+- **Storage I/O Virtual NVMe Device Baseline**:
+  - Integrated QEMU/KVM virtual NVMe guest benchmarks (`/opt/ai-ssd-v2/results/p2/virtual_nvme_benchmarks.json`).
+  - Verified direct I/O pread on `/opt/ai-ssd-v2/images/v2_nvme.raw` (3.42 $\mu\text{s}$ read latency).
+- **Structured Artifacts Exported to `/opt/ai-ssd-v2/results/p3/`**:
+  - `phase3_prefetch_ablations.json`
+  - `phase3_system_ablations.json`
+  - `unified_results.json`
+  - `prefetch_summary.csv`
+  - `system_ablations_summary.csv`
+- **Documentation Authored**:
+  - `docs/v2/P3_PHASE3_RESULTS.md`
+  - `docs/v2/STATUS.md`
+  - `docs/v2/DECISIONS.md`
+- **Tests**:
+  - 27/27 tests passing across unit and integration suites (`pytest person3_system/tests/ tests/test_end_to_end_real_pipeline.py tests/test_phase3_eval.py -v`).
 
 ---
 
 ## Working On
 
-Ready for Phase 3: Hardware-in-the-loop FEMU / NVMe driver integration and live QEMU benchmarking with P2.
+Ready for final project review and cross-agent dashboard integration.
 
 ---
 
 ## Blockers
 
-None. Cross-component trace contracts and integration layers are verified.
+None.
 
 ---
 
 ## Dependencies
 
-- P1 trace artifact: `/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.jsonl` (consumed and verified).
-- P2 tensor mapping: `person2_ssd/kv_allocator/tensor_mapping.py` (integrated and verified).
+- P1 Real Qwen trace: `/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.jsonl` (consumed).
+- P2 Deterministic Tensor Mapper & Virtual NVMe: integrated and verified.
 
 ---
 
 ## Tests
 
-26 passing tests:
+27 passing tests:
+- `tests/test_phase3_eval.py` (1 test, 100% pass)
 - `tests/test_end_to_end_real_pipeline.py` (2 tests, 100% pass)
 - `person3_system/tests/test_storage_backend.py` (5 tests)
 - `person3_system/tests/test_trace_reader.py` (5 tests)

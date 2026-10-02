@@ -33,3 +33,19 @@ Reason: Guarantees bit-exact physical NAND channel, die, plane, block, and page 
 Alternatives considered: Maintaining separate analytical striping logic in P3 (rejected: creates cross-agent divergence).
 Affected agents: P2, P3
 Status: ACCEPTED
+
+## DECISION-005: Real Prefetching Methodology & Metric Discipline
+Date: 2026-10-03
+Decision: Deprecate the synthetic 99.2% prefetch hit rate claim and replace it with empirical evaluation on the real Qwen2.5-0.5B KV trace across Conservative (28.5%), Normal (65.3%), and Aggressive (96.0%) policies with rigorous accounting of useless prefetches (cache pollution) and wasted bytes.
+Reason: Prevents unscientific claims based on artificial sequential synthetic traces and reflects real transformer inter-layer attention locality.
+Alternatives considered: Retaining static hit-rate parameters.
+Affected agents: P3
+Status: ACCEPTED
+
+## DECISION-006: Separation of Real, Analytical, and Virtual-Device Measurements
+Date: 2026-10-03
+Decision: Strictly categorize all reported metrics in documentation and JSON exports as `REAL`, `ANALYTICAL`, or `VIRTUAL-DEVICE`. Prohibit fabricating combined end-to-end latency without explicit classification.
+Reason: Maintains scientific credibility and clarity between physical CPU inference, simulated flash FTL timing models, and guest virtual NVMe hardware baselines.
+Alternatives considered: Conflating all numbers into a single synthetic latency figure.
+Affected agents: P1, P2, P3
+Status: ACCEPTED

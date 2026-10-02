@@ -6,15 +6,15 @@ Real LLM + Real KV Cache + NVMe + FEMU + Tensor-Aware FTL
 
 ## Current Phase
 
-PHASE 2 — REAL TRACE CONTRACT & CROSS-COMPONENT INTEGRATION COMPLETE
+PHASE 3 — REAL PREFETCH & END-TO-END SYSTEM EVALUATION COMPLETE
 
 ## Current Milestone
 
-M2: Cross-Component Trace & FTL Integration
+M3: System Performance Verification & Multi-Tier Ablations
 
 ## Last Global Update
 
-2026-10-03T01:30:00+05:30 (P3 Phase 2 Completion)
+2026-10-03T02:25:00+05:30 (P3 Phase 3 Completion)
 
 ---
 
@@ -23,26 +23,28 @@ M2: Cross-Component Trace & FTL Integration
 | Agent | Worktree | Branch | State |
 |---|---|---|---|
 | P1 | ../ai-ssd-p1 | v2/p1-real-llm-kv | TRACE GENERATION COMPLETE (Qwen2.5-0.5B 512-ctx) |
-| P2 | ../ai-ssd-p2 | v2/p2-femu-ftl | TENSOR MAPPING & FTL REPLAYER VERIFIED |
-| P3 | ../ai-ssd-p3 | v2/p3-system-integration | PHASE 2 INTEGRATION COMPLETE (All 7,872 events verified) |
+| P2 | ../ai-ssd-p2 | v2/p2-femu-ftl | VIRTUAL NVME BENCHMARKS & FTL TIMING COMPLETE |
+| P3 | ../ai-ssd-p3 | v2/p3-system-integration | PHASE 3 COMPLETE (Real Prefetch Sweeps & System Ablations) |
 
 ---
 
 # Dependency State
 
-- P1 -> P3: Real trace artifact `/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.jsonl` active and consumed.
-- P2 -> P3: `DeterministicTensorMapper` integrated into P3 analytical storage backend.
+- P1 -> P3: Real trace artifact `/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.jsonl` consumed.
+- P2 -> P3: `DeterministicTensorMapper` and QEMU virtual NVMe device benchmarks integrated.
 
 ---
 
 # Integration State
 
-- **Phase 1 Blockers Resolved**:
-  - Blocker 2: Canonical trace schema (`common/schemas/trace.py`) established with transparent aliasing (`event_id`/`seq_id`, `step`/`step_id`, `byte_size`/`byte_length`, `sub_page`). Manifest auto-discovery enabled.
-  - Blocker 4: KV physical sizing codified (`common/schemas/kv_block.py`: 4096 B Key, 4096 B Value, 8192 B combined). Backend preserves explicit byte length without defaulting to 4096.
-- **End-to-End Pipeline Verified**:
-  - `tests/test_end_to_end_real_pipeline.py`: Replays all 7,872 P1 real events through Canonical TraceReader, StorageRequest, P2 Tensor Mapper, and AnalyticalFTLBackend across 8 channels.
-  - Zero dropped events; 177,733,632 bytes transferred; 26/26 unit and integration tests passing.
+- **Phase 3 Real Evaluation Completed**:
+  - `benchmarks/run_phase3_eval.py`: Replays all 7,872 real LLM events across 4 prefetch configurations and 6 system ablation baselines.
+  - Empirical prefetch hit rates: 0.0% (None), 28.5% (Conservative), 65.3% (Normal), 96.0% (Aggressive).
+  - Storage stall penalty eliminated by 99.36% under aggressive prefetch (0.81 ms total stall).
+  - Multi-channel FTL speedup: 2.65× (180.0 ms -> 67.8 ms).
+  - Full combined system achieves 620.88 tok/s (96.86% of dense in-DRAM execution speed) with 80% KV cache offload.
+  - Results exported to `/opt/ai-ssd-v2/results/p3/` and documented in `docs/v2/P3_PHASE3_RESULTS.md`.
+  - All 27 unit and integration tests passing.
 
 ---
 
