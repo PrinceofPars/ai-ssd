@@ -1,10 +1,10 @@
 """
-Deterministic Tensor-to-Storage Mapping Architecture.
+Deterministic Tensor-to-Storage Mapping Architecture (Canonical P2 Implementation).
 
 Formulates the formal 4-level translation hierarchy:
-    Tensor Coordinate (layer, head, token)
+    Tensor Coordinate (layer, head, token_start/block_id)
         ↓
-    KV Block Descriptor (token_block_idx, 4096-byte unit)
+    KV Block Descriptor (token_block_idx, 4096-byte page / 8192-byte block)
         ↓
     Logical Block Address (LBA, 64-bit sector offset in NVMe namespace)
         ↓
@@ -31,18 +31,31 @@ from common.constants import (
 
 @dataclass(frozen=True)
 class TensorCoordinate:
+    """
+    Identifies a discrete KV block in tensor space.
+    Supports either token-index or explicit block_id resolution.
+    """
     layer_id: int
     head_id: int
-    token_idx: int
+    token_idx: int = 0
     tokens_per_block: int = 16
+    block_id: Optional[int] = None
+    blocks_per_head: int = 44
 
     @property
     def token_block_idx(self) -> int:
+        if self.token_idx > 0:
+            return self.token_idx // max(1, self.tokens_per_block)
+        if self.block_id is not None and self.blocks_per_head > 0:
+            return self.block_id % self.blocks_per_head
         return self.token_idx // max(1, self.tokens_per_block)
 
 
 @dataclass(frozen=True)
 class LBAAddress:
+    """
+    Represents a Logical Block Address (LBA) on a standard NVMe block device.
+    """
     lba: int
     sector_size_bytes: int = 4096
     mode: str = "tensor_aware"
@@ -54,6 +67,9 @@ class LBAAddress:
 
 @dataclass(frozen=True)
 class NANDPhysicalCoordinate:
+    """
+    Physical coordinates within the multi-channel flash geometry.
+    """
     channel: int
     die: int
     plane: int
@@ -67,6 +83,7 @@ class NANDPhysicalCoordinate:
 class DeterministicTensorMapper:
     """
     Translates tensor coordinates to LBA space and physical NAND locations.
+    Can be directly instantiated and used by Person 3 without duplicating logic.
     """
     def __init__(
         self,
@@ -77,8 +94,8 @@ class DeterministicTensorMapper:
         pages_per_block: int = SSD_PAGES_PER_BLOCK,
         sector_size_bytes: int = DEFAULT_BLOCK_SIZE_BYTES,
         max_tokens_per_head: int = 32768,
-        num_layers: int = 32,
-        num_heads: int = 32,
+        num_layers: int = 24,
+        num_heads: int = 2,
     ):
         self.channels = channels
         self.dies_per_channel = dies_per_channel
@@ -103,16 +120,14 @@ class DeterministicTensorMapper:
 
         if mode == "conventional":
             # Linear sequential allocation:
-            # All tokens of head 0, then head 1, then head 2...
             global_head_idx = (layer * self.num_heads) + head
             raw_lba = (global_head_idx * self.blocks_per_head) + b_idx
             lba = raw_lba % self.total_device_blocks
             return LBAAddress(lba=lba, sector_size_bytes=self.sector_size_bytes, mode="conventional")
 
         elif mode == "tensor_aware":
-            # Channel-striped LBA allocation:
-            # Interleaves LBAs so adjacent heads and token blocks fall into distinct channel stripe zones
-            target_ch = (head + b_idx + (b_idx // self.channels)) % self.channels
+            # Channel-striped LBA allocation incorporating layer, head, and token block index
+            target_ch = (layer + head + b_idx + (b_idx // self.channels)) % self.channels
             target_die = (layer + (head // self.channels) + (b_idx // self.channels)) % self.dies_per_channel
             stripe_unit = self.total_device_blocks // (self.channels * self.dies_per_channel)
             offset_in_stripe = ((layer * self.num_heads + head) * self.blocks_per_head + b_idx) % stripe_unit
@@ -136,7 +151,7 @@ class DeterministicTensorMapper:
         head = coord.head_id
 
         if mode == "conventional":
-            # Conventional FTL fills channel 0 first
+            # Conventional FTL concentrates traffic sequentially onto channel 0
             ch = 0
             die = 0
             pl = 0
@@ -146,7 +161,9 @@ class DeterministicTensorMapper:
             return NANDPhysicalCoordinate(channel=ch, die=die, plane=pl, block=blk, page=pg)
 
         elif mode == "tensor_aware":
-            ch = (head + b_idx + (b_idx // self.channels)) % self.channels
+            # Factors in layer, head, and block index to guarantee multi-channel reachability
+            # even when the model architecture has only 2 KV heads (GQA)
+            ch = (layer + head + b_idx + (b_idx // self.channels)) % self.channels
             die = (layer + (head // self.channels) + (b_idx // self.channels)) % self.dies_per_channel
             pl = (b_idx // (self.channels * self.dies_per_channel)) % self.planes_per_die
 

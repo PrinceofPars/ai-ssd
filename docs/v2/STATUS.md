@@ -14,7 +14,7 @@ M0
 
 ## Last Global Update
 
-Not started.
+2026-10-02 (P2 Real Trace Replayer and FTL Repair verified)
 
 ---
 
@@ -23,7 +23,7 @@ Not started.
 | Agent | Worktree | Branch | State |
 |---|---|---|---|
 | P1 | ../ai-ssd-p1 | v2/p1-real-llm-kv | NOT STARTED |
-| P2 | ../ai-ssd-p2 | v2/p2-femu-ftl | NOT STARTED |
+| P2 | ../ai-ssd-p2 | v2/p2-femu-ftl | PHASE 2 COMPLETE (Real Trace Replay Verified) |
 | P3 | ../ai-ssd-p3 | v2/p3-system-integration | NOT STARTED |
 
 ---

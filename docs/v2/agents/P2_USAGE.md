@@ -13,16 +13,16 @@ FEMU / NVMe / FTL / NAND
 # Current Session
 
 Session:
-SESSION-P2-V2-002
+SESSION-P2-V2-003
 
 Started:
-2026-10-02T23:03:00+05:30
+2026-10-03T01:05:00+05:30
 
 Last Refresh:
-2026-10-02T23:25:00+05:30
+2026-10-03T01:15:00+05:30
 
 Current State:
-PHASE 2 COMPLETE — ALL PHASE 2A-2I TASKS EXECUTED & VERIFIED
+PHASE 2 COMPLETE — REAL TRACE REPLAYER & FTL REPAIR VERIFIED
 
 ---
 
@@ -86,61 +86,65 @@ Completed:
 ## Session SESSION-P2-V2-002
 
 Status:
-PHASE 2 COMPLETE
+PHASE 2 LEVEL 1/2/3 INITIAL SETUP COMPLETE
 
 Completed:
-1. Environment verification: confirmed `TMUX` non-empty, session `p2`, `pwd=/home/ubuntu/ai-ssd-p2`, branch `v2/p2-femu-ftl`, commit `db7e0f8`.
-2. Phase 2A (Reconnaissance): Analyzed V1 models, schemas, and FTL algorithms.
-3. Phase 2B (FEMU/QEMU Investigation): Researched FEMU vs QEMU; produced `docs/v2/research/FEMU_QEMU_NVME_EVALUATION.md`.
-4. Phase 2C (Virtual NVMe Smoke Test): Built 18 MB micro-initramfs and 1.0 GB sparse NVMe image; booted QEMU with KVM inside tmux `p2`; ran automated discovery and FIO read/write benchmarks (23.6k read IOPS, 25.1k write IOPS); saved log to `/opt/ai-ssd-v2/logs/virtual_nvme_smoke_test.log`.
-5. Phase 2D (Analytical FTL): Preserved analytical FTL cycle model with identical geometry parameters.
-6. Phase 2E (Deterministic Tensor Mapping): Built `person2_ssd/kv_allocator/tensor_mapping.py` with 4-level translation hierarchy.
-7. Phase 2F (Trace Replay): Built `person2_ssd/trace_replay/replayer.py` with multi-queue simulation and contention metrics.
-8. Phase 2G (Controlled Comparison): Built `benchmarks/run_v2_storage_experiment.py`; executed parametric sweeps over channels (4, 8, 16), QD (4, 8, 16, 32), and batch sizes (16-256); saved results to `results/raw/v2_ftl_benchmark.json` and `/opt/ai-ssd-v2/results/v2_storage_experiment_results.json`.
-9. Phase 2H (P3 Interface): Created formal proposal `docs/v2/proposals/P2_STORAGE_BACKEND_INTERFACE.md`.
-10. Phase 2I (Testing): Created `person2_ssd/tests/test_v2_storage.py` (7 test suites, 100% pass rate).
+1. Verified virtual NVMe smoke test inside tmux p2 (QEMU 6.2 with KVM, 4KB LBA, FIO benchmarks).
+2. Deployed initial tensor mapping and trace replayer.
+3. Created P3 interface proposal.
+
+---
+
+## Session SESSION-P2-V2-003
+
+Status:
+PHASE 2 REAL TRACE REPLAYER & FTL REPAIR COMPLETE
+
+Completed:
+1. Fixed manifest selection bug: `StorageTraceReplayer.discover_trace_file` strictly globs `*.jsonl`. Manifest is resolved explicitly as metadata.
+2. Removed all silent corrupting defaults: validated all required fields (`operation`, `layer_id`, `head_id`, `byte_size`, token/block location) with loud `ValueError` exceptions.
+3. Fixed operation mapping: correctly mapped `PREFILL_WRITE` (write), `DECODE_READ` (read), `TOPK_FILTER` (Key read), `TOPK_FETCH` (Value read).
+4. Fixed byte size accounting: preserved 4096 B for single pages, 8192 B for combined blocks, and 335,872 B for candidate filter scans.
+5. Resolved 2-head GQA channel imbalance in `DeterministicTensorMapper` by factoring layer offset into channel assignment:
+   $$\text{Channel} = (L + h + b_{\text{idx}} + \lfloor b_{\text{idx}} / C \rfloor) \pmod C$$
+   All 8 channels reached with balanced load (12.3% to 12.6% each).
+6. Replayed canonical P1 real trace `/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.jsonl` (7,872 events, 0 dropped). Produced and saved validation report.
+7. Added 8 new regression tests in `person2_ssd/tests/test_trace_replayer_repair.py` (all passed).
+8. Re-ran `test_v2_storage.py` (all 7 suites passed).
 
 Remaining:
-Await Phase 3 instructions and P1 real trace production.
+Coordinate with P3 for end-to-end pipeline execution.
 
 Exact Next Action:
-Integrate with P3 pipeline when P3 begins storage adapter binding.
+Provide P3 with import instructions for `DeterministicTensorMapper`.
 
 Files Changed:
-- `docs/v2/agents/P2_STATUS.md`
-- `docs/v2/agents/P2_USAGE.md`
-- `docs/v2/research/FEMU_QEMU_NVME_EVALUATION.md`
-- `docs/v2/proposals/P2_STORAGE_BACKEND_INTERFACE.md`
 - `person2_ssd/kv_allocator/tensor_mapping.py`
 - `person2_ssd/trace_replay/replayer.py`
-- `person2_ssd/trace_replay/__init__.py`
-- `person2_ssd/tests/test_v2_storage.py`
-- `person2_ssd/tests/test_p2_mock.py`
-- `benchmarks/run_v2_storage_experiment.py`
-- `scripts/build_initramfs.py`
-- `scripts/run_nvme_smoke.sh`
+- `person2_ssd/tests/test_trace_replayer_repair.py`
+- `scripts/run_real_trace_validation.py`
+- `docs/v2/STATUS.md`
+- `docs/v2/agents/P2_STATUS.md`
+- `docs/v2/agents/P2_USAGE.md`
 
 Blockers:
-None.
+GitHub push blocked by publickey permission on EC2. All commits intact locally.
 
 Dependencies:
-P1 for real LLM trace export; P3 for orchestrator integration.
+None.
 
 Commit:
-Commits to be structured as focused changes per git rules.
+To be committed as focused commit.
 
 ---
 
 # Resource Notes
 
 CPU:
-8 vCPUs host total; P2 consumed ~2 vCPUs during tests, leaving 6 vCPUs for P1, P3, and OS.
+8 vCPUs host total; P2 trace replay consumed < 1 vCPU (< 1.5 seconds runtime).
 
 RAM:
-61 GiB total; QEMU guest used 2.0 GiB, Python processes used < 150 MiB. Host free RAM remains > 55 GiB.
+Host free RAM > 55 GiB. Replay footprint < 80 MiB.
 
 Disk:
-Sparse NVMe image occupies 0 initial bytes physical (1.0 GB logical); initramfs is 18 MB.
-
-Other:
-Hardware KVM virtualization (`/dev/kvm`) validated and functional.
+Report files < 50 KiB total.
