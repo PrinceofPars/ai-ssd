@@ -60,6 +60,7 @@ mount -t devtmpfs none /dev
 
 echo "=================================================="
 echo "AI-SSD V2 Virtual NVMe Guest Environment Booted"
+echo "Classification: VIRTUAL-DEVICE"
 echo "Kernel: $(uname -r)"
 echo "=================================================="
 
@@ -79,22 +80,30 @@ if [ -e /dev/nvme0n1 ]; then
     echo "--- NVMe Namespace Info ---"
     nvme id-ns /dev/nvme0n1 | grep -E "(nsze|ncap|nuse|lbaf)"
     echo ""
-    echo "--- Sequential Write 4KB test (100 blocks) ---"
-    dd if=/dev/zero of=/dev/nvme0n1 bs=4k count=100 oflag=direct 2>&1
-    echo ""
-    echo "--- Sequential Read 4KB test (100 blocks) ---"
-    dd if=/dev/nvme0n1 of=/dev/null bs=4k count=100 iflag=direct 2>&1
-    echo ""
-    echo "--- FIO Benchmark: Random Read 4KB (8 I/O depth) ---"
-    fio --name=nvme_randread --filename=/dev/nvme0n1 --direct=1 --rw=randread --bs=4k --ioengine=libaio --iodepth=8 --runtime=5 --time_based --group_reporting
-    echo ""
-    echo "--- FIO Benchmark: Random Write 4KB (8 I/O depth) ---"
-    fio --name=nvme_randwrite --filename=/dev/nvme0n1 --direct=1 --rw=randwrite --bs=4k --ioengine=libaio --iodepth=8 --runtime=5 --time_based --group_reporting
-    echo ""
-    echo "[SMOKE TEST PASSED] All tests executed successfully on virtual NVMe!"
+
+    echo "=== FIO_START: seq_read_64k ==="
+    fio --name=seq_read_64k --filename=/dev/nvme0n1 --direct=1 --rw=read --bs=64k --ioengine=libaio --iodepth=4 --runtime=3 --time_based --group_reporting --output-format=json
+    echo "=== FIO_END: seq_read_64k ==="
+
+    echo "=== FIO_START: seq_write_64k ==="
+    fio --name=seq_write_64k --filename=/dev/nvme0n1 --direct=1 --rw=write --bs=64k --ioengine=libaio --iodepth=4 --runtime=3 --time_based --group_reporting --output-format=json
+    echo "=== FIO_END: seq_write_64k ==="
+
+    echo "=== FIO_START: rand_read_4k ==="
+    fio --name=rand_read_4k --filename=/dev/nvme0n1 --direct=1 --rw=randread --bs=4k --ioengine=libaio --iodepth=8 --runtime=3 --time_based --group_reporting --output-format=json
+    echo "=== FIO_END: rand_read_4k ==="
+
+    echo "=== FIO_START: rand_write_4k ==="
+    fio --name=rand_write_4k --filename=/dev/nvme0n1 --direct=1 --rw=randwrite --bs=4k --ioengine=libaio --iodepth=8 --runtime=3 --time_based --group_reporting --output-format=json
+    echo "=== FIO_END: rand_write_4k ==="
+
+    echo "=== FIO_START: rand_read_8k ==="
+    fio --name=rand_read_8k --filename=/dev/nvme0n1 --direct=1 --rw=randread --bs=8k --ioengine=libaio --iodepth=8 --runtime=3 --time_based --group_reporting --output-format=json
+    echo "=== FIO_END: rand_read_8k ==="
+
+    echo "[VIRTUAL NVME BENCHMARKS COMPLETE]"
 else
-    echo "[ERROR] /dev/nvme0n1 not found! Devices present:"
-    ls -l /dev
+    echo "[ERROR] /dev/nvme0n1 not found!"
 fi
 
 echo "=================================================="
