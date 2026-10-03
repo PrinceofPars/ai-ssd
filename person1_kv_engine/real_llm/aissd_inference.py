@@ -216,10 +216,11 @@ def create_default_storage_backend(
     buffer_capacity_blocks: int = 512,
     storage_mode: str = "file",
     enable_batching: bool = True,
+    enable_async_pipeline: bool = False,
 ) -> Any:
     """Creates the production AI-SSD storage backend pipeline.
     
-    If enable_prefetch is True and Person 3 is available:
+    If enable_prefetch or enable_async_pipeline is True and Person 3 is available:
         Person 3's RealInferencePrefetchAdapter wraps Person 2's RealInferenceStorageBackend.
     Otherwise:
         Person 2's RealInferenceStorageBackend (multi-channel FTL + tensor-aware mapping) is returned.
@@ -245,7 +246,7 @@ def create_default_storage_backend(
             head_dim=head_dim,
         )
 
-    if enable_prefetch and _P3_AVAILABLE and RealInferencePrefetchAdapter is not None:
+    if (enable_prefetch or enable_async_pipeline) and _P3_AVAILABLE and RealInferencePrefetchAdapter is not None:
         bytes_per_elem = 4 if str(dtype).lower() in ("fp32", "float32") else 2
         block_bytes = tokens_per_block * num_heads * head_dim * bytes_per_elem * 2
         adapter = RealInferencePrefetchAdapter(
@@ -256,9 +257,9 @@ def create_default_storage_backend(
             kv_heads_per_block=num_heads,
             head_dim=head_dim,
             dtype=dtype,
+            num_layers=num_layers,
+            enable_async_pipeline=enable_async_pipeline,
         )
-        if hasattr(adapter, "predictor") and hasattr(adapter.predictor, "total_layers"):
-            adapter.predictor.total_layers = num_layers
         return adapter
 
     return backend
@@ -282,6 +283,7 @@ class AISSDKVManager:
         top_k_pct: float = 10.0,
         enable_computational_storage: bool = False,
         enable_prefetch: bool = True,
+        enable_async_pipeline: bool = False,
     ):
         self.backend = backend
         self.num_layers = num_layers
@@ -290,6 +292,7 @@ class AISSDKVManager:
         self.top_k_pct = top_k_pct
         self.enable_computational_storage = enable_computational_storage
         self.enable_prefetch = enable_prefetch
+        self.enable_async_pipeline = enable_async_pipeline
         self.tokens_per_block = 16
         self.head_dim = 64
         self.is_active = False
@@ -445,33 +448,58 @@ class AISSDKVManager:
                 # Candidate Keys transferred to host = 0 bytes!
                 self.topk_metadata_bytes_to_host += len(top_bids) * 12
 
-                # Inter-layer speculative prefetch for Layer L+1:
-                t_pref_start = time.perf_counter()
-                if self.enable_prefetch and hasattr(self.backend, "predict_and_prefetch") and cand_bids:
-                    winning_bids = [bid for _, bid, _ in top_bids]
-                    self.backend.predict_and_prefetch(current_layer_id=l_idx, current_block_ids=winning_bids)
-                self.timings["prefetch_s"] += time.perf_counter() - t_pref_start
-
-                # Host retrieves winning blocks over PCIe (TOPK_FETCH):
                 win_bids = [bid for _, bid, _ in top_bids]
 
-                # Fetch winning V pages
-                t_v_start = time.perf_counter()
-                if hasattr(self.backend, "read_value_page_batch"):
-                    loaded_v_pages = self.backend.read_value_page_batch(l_idx, win_bids)
-                else:
-                    loaded_v_pages = {bid: self.backend.read_value_page(l_idx, bid) for bid in win_bids}
-                self.timings["winning_v_reads_s"] += time.perf_counter() - t_v_start
-                self.winning_v_bytes_to_host += len(win_bids) * 4096
+                if self.enable_async_pipeline:
+                    # Phase 8: Contiguous 8 KiB KV block retrieval
+                    t_blk_start = time.perf_counter()
+                    if hasattr(self.backend, "read_block_batch"):
+                        loaded_blocks = self.backend.read_block_batch(l_idx, win_bids)
+                        loaded_k_pages = {bid: loaded_blocks[bid][0] for bid in win_bids}
+                        loaded_v_pages = {bid: loaded_blocks[bid][1] for bid in win_bids}
+                    else:
+                        loaded_k_pages = {bid: self.backend.read_key_page(l_idx, bid) for bid in win_bids}
+                        loaded_v_pages = {bid: self.backend.read_value_page(l_idx, bid) for bid in win_bids}
+                    blk_elapsed = time.perf_counter() - t_blk_start
+                    self.timings["winning_v_reads_s"] += blk_elapsed / 2.0
+                    self.timings["candidate_k_reads_s"] += blk_elapsed / 2.0
+                    self.winning_v_bytes_to_host += len(win_bids) * 4096
+                    self.winning_k_bytes_to_host += len(win_bids) * 4096
 
-                # Fetch winning K pages (only for winning blocks, NOT candidate blocks!)
-                t_k_start = time.perf_counter()
-                if hasattr(self.backend, "read_key_page_batch"):
-                    loaded_k_pages = self.backend.read_key_page_batch(l_idx, win_bids)
+                    # Inter-layer pipelined async prefetch for Layer L+1:
+                    # Dispatched after current layer blocks are read so background storage I/O
+                    # overlaps with host attention matmul and MLP computation
+                    t_pref_start = time.perf_counter()
+                    if self.enable_prefetch and hasattr(self.backend, "predict_and_prefetch") and cand_bids:
+                        self.backend.predict_and_prefetch(current_layer_id=l_idx, current_block_ids=win_bids, async_mode=True)
+                    self.timings["prefetch_s"] += time.perf_counter() - t_pref_start
                 else:
-                    loaded_k_pages = {bid: self.backend.read_key_page(l_idx, bid) for bid in win_bids}
-                self.timings["candidate_k_reads_s"] += time.perf_counter() - t_k_start
-                self.winning_k_bytes_to_host += len(win_bids) * 4096
+                    # Existing Phase 7 execution path
+                    # Inter-layer speculative prefetch for Layer L+1:
+                    t_pref_start = time.perf_counter()
+                    if self.enable_prefetch and hasattr(self.backend, "predict_and_prefetch") and cand_bids:
+                        winning_bids = [bid for _, bid, _ in top_bids]
+                        self.backend.predict_and_prefetch(current_layer_id=l_idx, current_block_ids=winning_bids)
+                    self.timings["prefetch_s"] += time.perf_counter() - t_pref_start
+
+                    # Host retrieves winning blocks over PCIe (TOPK_FETCH):
+                    # Fetch winning V pages
+                    t_v_start = time.perf_counter()
+                    if hasattr(self.backend, "read_value_page_batch"):
+                        loaded_v_pages = self.backend.read_value_page_batch(l_idx, win_bids)
+                    else:
+                        loaded_v_pages = {bid: self.backend.read_value_page(l_idx, bid) for bid in win_bids}
+                    self.timings["winning_v_reads_s"] += time.perf_counter() - t_v_start
+                    self.winning_v_bytes_to_host += len(win_bids) * 4096
+
+                    # Fetch winning K pages (only for winning blocks, NOT candidate blocks!)
+                    t_k_start = time.perf_counter()
+                    if hasattr(self.backend, "read_key_page_batch"):
+                        loaded_k_pages = self.backend.read_key_page_batch(l_idx, win_bids)
+                    else:
+                        loaded_k_pages = {bid: self.backend.read_key_page(l_idx, bid) for bid in win_bids}
+                    self.timings["candidate_k_reads_s"] += time.perf_counter() - t_k_start
+                    self.winning_k_bytes_to_host += len(win_bids) * 4096
 
             else:
                 # Host-side candidate streaming (Phase 5/6 baseline path)
@@ -678,6 +706,7 @@ def run_aissd_decode(
     storage_backend: Optional[Any] = None,
     enable_prefetch: bool = True,
     enable_computational_storage: bool = False,
+    enable_async_pipeline: bool = False,
 ) -> Dict[str, Any]:
     """Runs genuine Qwen inference where KV access during decode executes the AI-SSD path.
     
@@ -688,7 +717,10 @@ def run_aissd_decode(
     rss_before = get_current_rss_mb()
 
     if storage_backend is None:
-        backend = create_default_storage_backend(enable_prefetch=enable_prefetch)
+        backend = create_default_storage_backend(
+            enable_prefetch=enable_prefetch,
+            enable_async_pipeline=enable_async_pipeline,
+        )
     else:
         backend = storage_backend
 
@@ -697,6 +729,7 @@ def run_aissd_decode(
         top_k_pct=top_k_pct,
         enable_computational_storage=enable_computational_storage,
         enable_prefetch=enable_prefetch,
+        enable_async_pipeline=enable_async_pipeline,
     )
 
     model_timings = {
@@ -844,6 +877,22 @@ def run_aissd_decode(
 
     generated_text = tokenizer.decode(generated_tokens)
 
+    # Critical-path accounting reconciliation
+    visible_storage_s = kv_mgr.timings["candidate_k_reads_s"] + kv_mgr.timings["winning_v_reads_s"]
+    visible_compute_s = (
+        model_timings["qkv_proj_s"] + model_timings["rope_s"] +
+        kv_mgr.timings["topk_scoring_s"] + kv_mgr.timings["candidate_selection_s"] +
+        kv_mgr.timings["prefetch_s"] + kv_mgr.timings["tensor_recon_s"] +
+        kv_mgr.timings["active_concat_s"] + model_timings["attn_matmul_s"] +
+        model_timings["out_proj_s"] + model_timings["mlp_and_norm_s"] +
+        model_timings["bookkeeping_s"]
+    )
+    critical_path_total_s = visible_storage_s + visible_compute_s
+    reconciliation_error_pct = (abs(wall_time - critical_path_total_s) / max(1e-6, wall_time)) * 100.0
+
+    raw_storage_time_s = getattr(backend, "raw_storage_time_s", 0.0)
+    overlap_hidden_s = max(0.0, raw_storage_time_s - visible_storage_s)
+
     # Compile unified timing breakdown across all measured components
     timing_breakdown = {
         "qkv_proj_s": round(model_timings["qkv_proj_s"], 4),
@@ -859,15 +908,13 @@ def run_aissd_decode(
         "out_proj_s": round(model_timings["out_proj_s"], 4),
         "mlp_and_norm_s": round(model_timings["mlp_and_norm_s"], 4),
         "bookkeeping_s": round(model_timings["bookkeeping_s"], 4),
-        "total_measured_s": round(
-            model_timings["qkv_proj_s"] + model_timings["rope_s"] +
-            kv_mgr.timings["candidate_k_reads_s"] + kv_mgr.timings["topk_scoring_s"] +
-            kv_mgr.timings["candidate_selection_s"] + kv_mgr.timings["prefetch_s"] +
-            kv_mgr.timings["winning_v_reads_s"] + kv_mgr.timings["tensor_recon_s"] +
-            kv_mgr.timings["active_concat_s"] + model_timings["attn_matmul_s"] +
-            model_timings["out_proj_s"] + model_timings["mlp_and_norm_s"] +
-            model_timings["bookkeeping_s"], 4
-        ),
+        "visible_storage_s": round(visible_storage_s, 4),
+        "visible_compute_s": round(visible_compute_s, 4),
+        "critical_path_total_s": round(critical_path_total_s, 4),
+        "reconciliation_error_pct": round(reconciliation_error_pct, 4),
+        "raw_storage_time_s": round(raw_storage_time_s, 4),
+        "overlap_hidden_s": round(overlap_hidden_s, 4),
+        "total_measured_s": round(critical_path_total_s, 4),
         "wall_time_s": round(wall_time, 4),
     }
 
@@ -895,6 +942,13 @@ def run_aissd_decode(
         "final_logits": step_logits[-1].cpu().numpy(),
         "timing_breakdown": timing_breakdown,
         "enable_computational_storage": enable_computational_storage,
+        "enable_async_pipeline": enable_async_pipeline,
+        "visible_storage_s": visible_storage_s,
+        "visible_compute_s": visible_compute_s,
+        "critical_path_total_s": critical_path_total_s,
+        "reconciliation_error_pct": reconciliation_error_pct,
+        "raw_storage_time_s": raw_storage_time_s,
+        "overlap_hidden_s": overlap_hidden_s,
         "candidate_k_bytes_to_host": kv_mgr.candidate_k_bytes_to_host,
         "winning_k_bytes_to_host": kv_mgr.winning_k_bytes_to_host,
         "winning_v_bytes_to_host": kv_mgr.winning_v_bytes_to_host,

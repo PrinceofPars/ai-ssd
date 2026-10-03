@@ -62,6 +62,8 @@ def run_worker():
     parser.add_argument("--disable-batching", action="store_false", dest="enable_batching")
     parser.add_argument("--enable-computational-storage", action="store_true", default=True, dest="enable_computational_storage")
     parser.add_argument("--disable-computational-storage", action="store_false", dest="enable_computational_storage")
+    parser.add_argument("--enable-async-pipeline", action="store_true", default=False, dest="enable_async_pipeline")
+    parser.add_argument("--disable-async-pipeline", action="store_false", dest="enable_async_pipeline")
     parser.add_argument("--top-k-pct", type=float, default=10.0)
     parser.add_argument("--context", type=int, required=True)
     parser.add_argument("--rep", type=int, default=0)
@@ -153,6 +155,7 @@ def run_worker():
             mapping_mode=args.mapping_mode,
             storage_mode=args.storage_mode,
             enable_batching=args.enable_batching,
+            enable_async_pipeline=args.enable_async_pipeline,
         )
 
         storage = getattr(backend, "storage_backend", backend)
@@ -169,6 +172,7 @@ def run_worker():
                 storage_backend=backend,
                 enable_prefetch=args.enable_prefetch,
                 enable_computational_storage=args.enable_computational_storage,
+                enable_async_pipeline=args.enable_async_pipeline,
                 seed=effective_seed,
             )
             total_time = time.perf_counter() - t0
@@ -199,6 +203,7 @@ def run_worker():
             staging_bytes = getattr(backend, "staging_memory_bytes", getattr(backend, "current_memory_bytes", 0))
 
             storage_telemetry = storage.get_telemetry() if hasattr(storage, "get_telemetry") else {}
+            prefetch_telemetry = backend.get_telemetry() if hasattr(backend, "get_telemetry") else {}
 
             output_data = {
                 "mode": "AI-SSD",
@@ -207,6 +212,7 @@ def run_worker():
                 "enable_prefetch": args.enable_prefetch,
                 "enable_batching": args.enable_batching,
                 "enable_computational_storage": args.enable_computational_storage,
+                "enable_async_pipeline": args.enable_async_pipeline,
                 "top_k_pct": args.top_k_pct,
                 "backend_classification": getattr(storage, "CLASSIFICATION", "UNKNOWN"),
                 "context_length": args.context,
@@ -237,6 +243,12 @@ def run_worker():
                 "winning_v_bytes_to_host": res.get("winning_v_bytes_to_host", 0),
                 "topk_metadata_bytes_to_host": res.get("topk_metadata_bytes_to_host", 0),
                 "total_data_movement_bytes": res.get("total_data_movement_bytes", 0),
+                "visible_storage_s": res.get("visible_storage_s", 0.0),
+                "visible_compute_s": res.get("visible_compute_s", 0.0),
+                "critical_path_total_s": res.get("critical_path_total_s", 0.0),
+                "reconciliation_error_pct": res.get("reconciliation_error_pct", 0.0),
+                "raw_storage_time_s": res.get("raw_storage_time_s", 0.0),
+                "overlap_hidden_s": res.get("overlap_hidden_s", 0.0),
                 "stored_blocks": len(storage._storage) if hasattr(storage, "_storage") else 0,
                 "p2_resident_payload_mb": p2_resident_bytes / (1024.0 * 1024.0),
                 "p3_resident_payload_mb": p3_resident_bytes / (1024.0 * 1024.0),
@@ -244,6 +256,7 @@ def run_worker():
                 "p2_metadata_bytes": p2_meta_bytes,
                 "channel_distribution": storage_telemetry.get("channel_distribution", {}),
                 "nvme_telemetry": res.get("nvme_telemetry", storage_telemetry.get("nvme_telemetry", {})),
+                "prefetch_telemetry": prefetch_telemetry,
                 "timing_breakdown": res.get("timing_breakdown", {}),
                 "token_ids": res["token_ids"],
                 "generated_text": res["generated_text"],

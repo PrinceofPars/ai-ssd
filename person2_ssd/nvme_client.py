@@ -10,6 +10,7 @@ import sys
 import time
 import socket
 import struct
+import threading
 import subprocess
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple, Any
@@ -42,6 +43,7 @@ class QemuNvmeClient:
         self.port = port
         self.sock: Optional[socket.socket] = None
         self._qemu_proc: Optional[subprocess.Popen] = None
+        self._lock = threading.RLock()
         self.total_read_bytes: int = 0
         self.total_write_bytes: int = 0
         self.read_ops: int = 0
@@ -104,32 +106,34 @@ class QemuNvmeClient:
 
     def connect(self) -> None:
         """Establishes persistent TCP socket connection with TCP_NODELAY enabled."""
-        if self.sock is not None:
-            try:
-                self.sock.close()
-            except OSError:
-                pass
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        s.settimeout(10.0)
-        s.connect((self.host, self.port))
-        self.sock = s
+        with self._lock:
+            if self.sock is not None:
+                try:
+                    self.sock.close()
+                except OSError:
+                    pass
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            s.settimeout(10.0)
+            s.connect((self.host, self.port))
+            self.sock = s
 
     def is_alive(self) -> bool:
         """Sends PING opcode and verifies guest controller response."""
-        if self.sock is None:
+        with self._lock:
+            if self.sock is None:
+                try:
+                    self.connect()
+                except OSError:
+                    return False
             try:
-                self.connect()
+                req = struct.pack("<IBBHQI", MAGIC, OP_PING, 0, 0, 0, 0)
+                self.sock.sendall(req)
+                resp = self._recv_exact(HEADER_SIZE)
+                magic, status, op, _, _, length = struct.unpack("<IBBHQI", resp)
+                return magic == MAGIC and status == 0
             except OSError:
                 return False
-        try:
-            req = struct.pack("<IBBHQI", MAGIC, OP_PING, 0, 0, 0, 0)
-            self.sock.sendall(req)
-            resp = self._recv_exact(HEADER_SIZE)
-            magic, status, op, _, _, length = struct.unpack("<IBBHQI", resp)
-            return magic == MAGIC and status == 0
-        except OSError:
-            return False
 
     def _recv_exact(self, n: int) -> bytes:
         data = bytearray()
@@ -145,56 +149,58 @@ class QemuNvmeClient:
         Dispatches a write operation to /dev/nvme0n1 in the QEMU guest.
         Returns the number of bytes written.
         """
-        if self.sock is None:
-            self.connect()
-        length = len(data)
-        req = struct.pack("<IBBHQI", MAGIC, OP_WRITE, 0, 0, offset, length)
-        t0 = time.perf_counter()
-        self.sock.sendall(req + data)
-        resp = self._recv_exact(HEADER_SIZE)
-        elapsed = time.perf_counter() - t0
+        with self._lock:
+            if self.sock is None:
+                self.connect()
+            length = len(data)
+            req = struct.pack("<IBBHQI", MAGIC, OP_WRITE, 0, 0, offset, length)
+            t0 = time.perf_counter()
+            self.sock.sendall(req + data)
+            resp = self._recv_exact(HEADER_SIZE)
+            elapsed = time.perf_counter() - t0
 
-        magic, status, op, _, resp_offset, bytes_written = struct.unpack("<IBBHQI", resp)
-        if magic != MAGIC or status != 0:
-            raise IOError(f"NVMe write failed at offset {offset}, length {length}, status {status}")
+            magic, status, op, _, resp_offset, bytes_written = struct.unpack("<IBBHQI", resp)
+            if magic != MAGIC or status != 0:
+                raise IOError(f"NVMe write failed at offset {offset}, length {length}, status {status}")
 
-        self.write_ops += 1
-        self.total_write_bytes += bytes_written
-        self.total_write_time_s += elapsed
-        return bytes_written
+            self.write_ops += 1
+            self.total_write_bytes += bytes_written
+            self.total_write_time_s += elapsed
+            return bytes_written
 
     def read(self, offset: int, length: int) -> bytes:
         """
         Dispatches a read operation to /dev/nvme0n1 in the QEMU guest.
         Returns raw byte buffer.
         """
-        if self.sock is None:
-            self.connect()
-        req = struct.pack("<IBBHQI", MAGIC, OP_READ, 0, 0, offset, length)
-        t_send = time.perf_counter()
-        self.sock.sendall(req)
-        send_elapsed = time.perf_counter() - t_send
+        with self._lock:
+            if self.sock is None:
+                self.connect()
+            req = struct.pack("<IBBHQI", MAGIC, OP_READ, 0, 0, offset, length)
+            t_send = time.perf_counter()
+            self.sock.sendall(req)
+            send_elapsed = time.perf_counter() - t_send
 
-        t_wait = time.perf_counter()
-        resp = self._recv_exact(HEADER_SIZE)
-        wait_elapsed = time.perf_counter() - t_wait
+            t_wait = time.perf_counter()
+            resp = self._recv_exact(HEADER_SIZE)
+            wait_elapsed = time.perf_counter() - t_wait
 
-        magic, status, op, _, resp_offset, data_len = struct.unpack("<IBBHQI", resp)
-        if magic != MAGIC or status != 0:
-            raise IOError(f"NVMe read failed at offset {offset}, length {length}, status {status}")
+            magic, status, op, _, resp_offset, data_len = struct.unpack("<IBBHQI", resp)
+            if magic != MAGIC or status != 0:
+                raise IOError(f"NVMe read failed at offset {offset}, length {length}, status {status}")
 
-        t_recv = time.perf_counter()
-        data = self._recv_exact(data_len)
-        recv_elapsed = time.perf_counter() - t_recv
+            t_recv = time.perf_counter()
+            data = self._recv_exact(data_len)
+            recv_elapsed = time.perf_counter() - t_recv
 
-        total_elapsed = send_elapsed + wait_elapsed + recv_elapsed
-        self.read_ops += 1
-        self.total_read_bytes += data_len
-        self.total_read_time_s += total_elapsed
-        self.total_send_time_s += send_elapsed
-        self.total_wait_time_s += wait_elapsed
-        self.total_recv_time_s += recv_elapsed
-        return data
+            total_elapsed = send_elapsed + wait_elapsed + recv_elapsed
+            self.read_ops += 1
+            self.total_read_bytes += data_len
+            self.total_read_time_s += total_elapsed
+            self.total_send_time_s += send_elapsed
+            self.total_wait_time_s += wait_elapsed
+            self.total_recv_time_s += recv_elapsed
+            return data
 
     def read_batch(self, requests: List[Tuple[int, int, int]]) -> Dict[int, bytes]:
         """
@@ -206,53 +212,54 @@ class QemuNvmeClient:
         """
         if not requests:
             return {}
-        if self.sock is None:
-            self.connect()
+        with self._lock:
+            if self.sock is None:
+                self.connect()
 
-        t_pack = time.perf_counter()
-        num_items = len(requests)
-        req_hdr = struct.pack("<IBBHQI", MAGIC, OP_BATCH_READ, 0, 0, 0, num_items)
-        items_payload = bytearray()
-        total_req_bytes = 0
-        for offset, length, bid in requests:
-            items_payload.extend(struct.pack("<QII", offset, length, bid))
-            total_req_bytes += length
-        pack_elapsed = time.perf_counter() - t_pack
+            t_pack = time.perf_counter()
+            num_items = len(requests)
+            req_hdr = struct.pack("<IBBHQI", MAGIC, OP_BATCH_READ, 0, 0, 0, num_items)
+            items_payload = bytearray()
+            total_req_bytes = 0
+            for offset, length, bid in requests:
+                items_payload.extend(struct.pack("<QII", offset, length, bid))
+                total_req_bytes += length
+            pack_elapsed = time.perf_counter() - t_pack
 
-        t_send = time.perf_counter()
-        self.sock.sendall(req_hdr + items_payload)
-        send_elapsed = time.perf_counter() - t_send
+            t_send = time.perf_counter()
+            self.sock.sendall(req_hdr + items_payload)
+            send_elapsed = time.perf_counter() - t_send
 
-        t_wait = time.perf_counter()
-        resp = self._recv_exact(HEADER_SIZE)
-        wait_elapsed = time.perf_counter() - t_wait
+            t_wait = time.perf_counter()
+            resp = self._recv_exact(HEADER_SIZE)
+            wait_elapsed = time.perf_counter() - t_wait
 
-        magic, status, op, _, _, resp_items = struct.unpack("<IBBHQI", resp)
-        if magic != MAGIC or status != 0:
-            raise IOError(f"NVMe batch read failed, status {status}")
+            magic, status, op, _, _, resp_items = struct.unpack("<IBBHQI", resp)
+            if magic != MAGIC or status != 0:
+                raise IOError(f"NVMe batch read failed, status {status}")
 
-        t_recv = time.perf_counter()
-        results: Dict[int, bytes] = {}
-        for _ in range(resp_items):
-            item_hdr = self._recv_exact(9)
-            item_status, bid, item_len = struct.unpack("<BII", item_hdr)
-            if item_status != 0:
-                raise IOError(f"NVMe batch read item failed for block {bid}")
-            data = self._recv_exact(item_len)
-            results[bid] = data
-        recv_elapsed = time.perf_counter() - t_recv
+            t_recv = time.perf_counter()
+            results: Dict[int, bytes] = {}
+            for _ in range(resp_items):
+                item_hdr = self._recv_exact(9)
+                item_status, bid, item_len = struct.unpack("<BII", item_hdr)
+                if item_status != 0:
+                    raise IOError(f"NVMe batch read item failed for block {bid}")
+                data = self._recv_exact(item_len)
+                results[bid] = data
+            recv_elapsed = time.perf_counter() - t_recv
 
-        total_elapsed = pack_elapsed + send_elapsed + wait_elapsed + recv_elapsed
-        self.read_ops += num_items
-        self.total_read_bytes += total_req_bytes
-        self.total_read_time_s += total_elapsed
-        self.total_pack_time_s += pack_elapsed
-        self.total_send_time_s += send_elapsed
-        self.total_wait_time_s += wait_elapsed
-        self.total_recv_time_s += recv_elapsed
-        self.batch_count += 1
-        self.batch_sizes.append(num_items)
-        return results
+            total_elapsed = pack_elapsed + send_elapsed + wait_elapsed + recv_elapsed
+            self.read_ops += num_items
+            self.total_read_bytes += total_req_bytes
+            self.total_read_time_s += total_elapsed
+            self.total_pack_time_s += pack_elapsed
+            self.total_send_time_s += send_elapsed
+            self.total_wait_time_s += wait_elapsed
+            self.total_recv_time_s += recv_elapsed
+            self.batch_count += 1
+            self.batch_sizes.append(num_items)
+            return results
 
     def compute_topk(
         self,
@@ -276,92 +283,99 @@ class QemuNvmeClient:
         """
         if not candidates:
             return []
-        if self.sock is None:
-            self.connect()
+        with self._lock:
+            if self.sock is None:
+                self.connect()
 
-        import numpy as np
+            import numpy as np
 
-        t_pack = time.perf_counter()
-        num_cands = len(candidates)
-        # 1. Header: magic, op, flags, reserved, offset, length (num_cands)
-        req_hdr = struct.pack("<IBBHQI", MAGIC, OP_COMPUTE_TOPK, 0, 0, 0, num_cands)
-        # 2. Top-K parameters header: num_candidates, top_k, q_heads, kv_heads, head_dim, scale
-        topk_hdr = struct.pack("<IIIIIf", num_cands, top_k, q_heads, kv_heads, head_dim, float(scale))
-        # 3. Query array bytes (float32 contiguous)
-        q_contiguous = np.ascontiguousarray(query, dtype=np.float32)
-        q_bytes = q_contiguous.tobytes()
-        # 4. Candidate items: offset (Q), length (I), block_id (I), actual_tokens (I)
-        cands_payload = bytearray()
-        total_internal_k_bytes = 0
-        for offset, length, bid, act_tok in candidates:
-            cands_payload.extend(struct.pack("<QIII", offset, length, bid, act_tok))
-            total_internal_k_bytes += length
+            t_pack = time.perf_counter()
+            num_cands = len(candidates)
+            # 1. Header: magic, op, flags, reserved, offset, length (num_cands)
+            req_hdr = struct.pack("<IBBHQI", MAGIC, OP_COMPUTE_TOPK, 0, 0, 0, num_cands)
+            # 2. Top-K parameters header: num_candidates, top_k, q_heads, kv_heads, head_dim, scale
+            topk_hdr = struct.pack("<IIIIIf", num_cands, top_k, q_heads, kv_heads, head_dim, float(scale))
+            # 3. Query array bytes (float32 contiguous)
+            q_contiguous = np.ascontiguousarray(query, dtype=np.float32)
+            q_bytes = q_contiguous.tobytes()
+            # 4. Candidate items: offset (Q), length (I), block_id (I), actual_tokens (I)
+            cands_payload = bytearray()
+            total_internal_k_bytes = 0
+            for offset, length, bid, act_tok in candidates:
+                cands_payload.extend(struct.pack("<QIII", offset, length, bid, act_tok))
+                total_internal_k_bytes += length
 
-        pack_elapsed = time.perf_counter() - t_pack
+            pack_elapsed = time.perf_counter() - t_pack
 
-        t_send = time.perf_counter()
-        self.sock.sendall(req_hdr + topk_hdr + q_bytes + cands_payload)
-        send_elapsed = time.perf_counter() - t_send
+            t_send = time.perf_counter()
+            self.sock.sendall(req_hdr + topk_hdr + q_bytes + cands_payload)
+            send_elapsed = time.perf_counter() - t_send
 
-        t_wait = time.perf_counter()
-        resp = self._recv_exact(HEADER_SIZE)
-        wait_elapsed = time.perf_counter() - t_wait
+            t_wait = time.perf_counter()
+            resp = self._recv_exact(HEADER_SIZE)
+            wait_elapsed = time.perf_counter() - t_wait
 
-        magic, status, op, _, _, resp_items = struct.unpack("<IBBHQI", resp)
-        if magic != MAGIC or status != 0:
-            raise IOError(f"NVMe in-storage topk failed, status {status}")
+            magic, status, op, _, _, resp_items = struct.unpack("<IBBHQI", resp)
+            if magic != MAGIC or status != 0:
+                raise IOError(f"NVMe in-storage topk failed, status {status}")
 
-        t_recv = time.perf_counter()
-        topk_results: List[Tuple[float, int, int]] = []
-        if resp_items > 0:
-            # Each item: block_id (uint32), score (float32), actual_tokens (uint32) = 12 bytes
-            resp_bytes = self._recv_exact(resp_items * 12)
-            for i in range(resp_items):
-                bid, score, act_tok = struct.unpack_from("<IfI", resp_bytes, i * 12)
-                topk_results.append((float(score), int(bid), int(act_tok)))
-        recv_elapsed = time.perf_counter() - t_recv
+            t_recv = time.perf_counter()
+            topk_results: List[Tuple[float, int, int]] = []
+            if resp_items > 0:
+                # Each item: block_id (uint32), score (float32), actual_tokens (uint32) = 12 bytes
+                resp_bytes = self._recv_exact(resp_items * 12)
+                for i in range(resp_items):
+                    bid, score, act_tok = struct.unpack_from("<IfI", resp_bytes, i * 12)
+                    topk_results.append((float(score), int(bid), int(act_tok)))
+            recv_elapsed = time.perf_counter() - t_recv
 
-        total_elapsed = pack_elapsed + send_elapsed + wait_elapsed + recv_elapsed
-        self.read_ops += num_cands
-        self.total_read_bytes += total_internal_k_bytes
-        self.total_read_time_s += total_elapsed
-        self.total_pack_time_s += pack_elapsed
-        self.total_send_time_s += send_elapsed
-        self.total_wait_time_s += wait_elapsed
-        self.total_recv_time_s += recv_elapsed
-        self.batch_count += 1
-        self.batch_sizes.append(num_cands)
+            total_elapsed = pack_elapsed + send_elapsed + wait_elapsed + recv_elapsed
+            self.read_ops += num_cands
+            self.total_read_bytes += total_internal_k_bytes
+            self.total_read_time_s += total_elapsed
+            self.total_pack_time_s += pack_elapsed
+            self.total_send_time_s += send_elapsed
+            self.total_wait_time_s += wait_elapsed
+            self.total_recv_time_s += recv_elapsed
+            self.batch_count += 1
+            self.batch_sizes.append(num_cands)
 
-        self.topk_compute_ops += 1
-        self.topk_internal_scanned_bytes += total_internal_k_bytes
-        self.topk_query_transferred_bytes += len(q_bytes) + len(cands_payload)
-        self.topk_metadata_transferred_bytes += resp_items * 12
-        return topk_results
+            self.topk_compute_ops += 1
+            self.topk_internal_scanned_bytes += total_internal_k_bytes
+            self.topk_query_transferred_bytes += len(q_bytes) + len(cands_payload)
+            self.topk_metadata_transferred_bytes += resp_items * 12
+            return topk_results
 
     def flush(self) -> None:
         """Flushes volatile write buffers on the NVMe device."""
-        if self.sock is None:
-            return
-        req = struct.pack("<IBBHQI", MAGIC, OP_FLUSH, 0, 0, 0, 0)
-        self.sock.sendall(req)
-        self._recv_exact(HEADER_SIZE)
+        with self._lock:
+            if self.sock is None:
+                return
+            req = struct.pack("<IBBHQI", MAGIC, OP_FLUSH, 0, 0, 0, 0)
+            self.sock.sendall(req)
+            self._recv_exact(HEADER_SIZE)
 
     def stop_qemu(self) -> None:
         """Shuts down the guest daemon cleanly and terminates the QEMU process."""
-        if self.sock is not None:
-            try:
-                req = struct.pack("<IBBHQI", MAGIC, OP_SHUTDOWN, 0, 0, 0, 0)
-                self.sock.sendall(req)
-                self.sock.close()
-            except OSError:
-                pass
-            self.sock = None
-        if self._qemu_proc is not None:
-            try:
-                self._qemu_proc.wait(timeout=5.0)
-            except subprocess.TimeoutExpired:
-                self._qemu_proc.kill()
-            self._qemu_proc = None
+        with self._lock:
+            if self.sock is not None:
+                try:
+                    req = struct.pack("<IBBHQI", MAGIC, OP_SHUTDOWN, 0, 0, 0, 0)
+                    self.sock.sendall(req)
+                    self.sock.close()
+                except OSError:
+                    pass
+                self.sock = None
+            if self._qemu_proc is not None:
+                try:
+                    self._qemu_proc.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    self._qemu_proc.kill()
+                self._qemu_proc = None
+
+    def close(self) -> None:
+        """Alias for stop_qemu()."""
+        self.stop_qemu()
 
     def reset_stats(self) -> None:
         """Resets all metrics and protocol timers to zero."""

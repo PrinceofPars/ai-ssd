@@ -6,23 +6,23 @@ Real LLM + Real KV Cache + NVMe + FEMU + Tensor-Aware FTL
 
 ## Current Phase
 
-PHASE 7 — COMPUTATIONAL STORAGE: IN-STORAGE TOP-K CANDIDATE FILTERING (COMPLETE)
+PHASE 8 — ASYNCHRONOUS STORAGE, DMA/PIPELINING & PREFETCH OPTIMIZATION (COMPLETE)
 
 ## Current Milestone
 
-M7 — Level B In-Storage Hardware AVX2/FMA Top-K Filtering on Virtual NVMe Device (/dev/nvme0n1)
+M8 — Overlapped Asynchronous KV Retrieval and Contiguous 8 KiB Combined Block Fetch on Virtual NVMe Device (/dev/nvme0n1)
 
 ## Last Global Update
 
-Completed Phase 7: Computational Storage in QEMU/NVMe environment:
-- Moved Key dot-product scoring and Top-K candidate selection inside the storage controller (`scripts/nvme_guest_daemon.c` with hardware AVX2/FMA intrinsics reading directly from `/dev/nvme0n1`).
-- Completely eliminated candidate Key streaming to host: candidate Key bytes transferred to host = 0 bytes (100% reduction of non-winning candidate Keys across PCIe).
-- Total storage bus data movement reduced by 81.47% (from 621.5 MB down to 115.2 MB).
-- QEMU/NVMe decode time collapsed from 52.70s to 21.48s (2.45x measured speedup).
-- Candidate Key read time collapsed from 32.63s to 4.08s (8.0x speedup).
-- 100% exact token ID match (16/16 tokens) maintained across all evaluated modes.
-- True host-RAM offload preserved: P2 and P3 resident payload remains 0.0 MB.
-- Reports: docs/v2/notes/PHASE7_COMPUTATIONAL_STORAGE_RESULTS.md, benchmarks/live_inference/results/phase7_computational_storage_results.json.
+Completed Phase 8: Asynchronous Storage, DMA/Pipelining & Prefetch Optimization:
+- Implemented contiguous 8 KiB KV block retrieval (`read_block_batch`), reducing storage request transactions by 50% (from 1,080 down to 540 batches) and increasing QEMU/NVMe decode throughput to 0.791 tok/s (20.23s wall time).
+- Implemented pipelined asynchronous speculative prefetching in `RealInferencePrefetchAdapter` using non-blocking background thread workers with reentrant lock synchronization in `QemuNvmeClient`.
+- Successfully overlapped and hid 9.9575s of raw storage retrieval latency behind host computation (68.8% of raw storage time hidden), achieving 529 zero-wait DRAM hits.
+- Verified critical-path reconciliation across all benchmark configurations with errors between 0.59% and 1.24% (< 2% target).
+- Identified the dominant remaining bottleneck shift: Host CPU Compute (61.6% of wall time) now exceeds Storage Retrieval (37.7% of wall time).
+- Maintained 100% exact token ID match (16/16 tokens) across all 6 benchmark runs.
+- Preserved true host-RAM offload: P2 and P3 resident payload remains 0.0 MB, candidate Key bytes transferred to host remains 0 B.
+- Deliverables: docs/v2/notes/PHASE8_ASYNC_STORAGE_RESULTS.md, benchmarks/live_inference/results/phase8_async_storage_results.json, scripts/run_phase8_benchmarks.py, tests/test_async_storage.py.
 
 ---
 

@@ -23,7 +23,8 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Set, List, Dict, Any, Optional, Tuple, Union
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
+import threading
 import time
 import numpy as np
 
@@ -44,7 +45,7 @@ class StagedInferenceBlock:
     data_k: Optional[np.ndarray] = None          # Actual Key tensor array
     data_v: Optional[np.ndarray] = None          # Actual Value tensor array
     data: Optional[bytes] = None                 # Actual contiguous bytes (K+V)
-    future: Optional[Future[StorageResult]] = None
+    future: Optional[Future[Any]] = None
     staged_time_ns: int = 0
     ready_time_ns: int = 0
     is_useful: bool = False
@@ -59,7 +60,9 @@ class RealInferencePrefetchAdapter:
     Sits between P1's KV manager and P2's RealInferenceStorageBackend.
     """
 
-    CLASSIFICATION: str = "ANALYTICAL"
+    @property
+    def CLASSIFICATION(self) -> str:
+        return getattr(self.storage_backend, "CLASSIFICATION", "VIRTUAL-DEVICE")
 
     def __init__(
         self,
@@ -70,6 +73,9 @@ class RealInferencePrefetchAdapter:
         kv_heads_per_block: int = 2,
         head_dim: int = 64,
         dtype: str = "float32",
+        num_layers: int = 36,
+        enable_async_pipeline: bool = False,
+        max_async_workers: int = 2,
     ):
         self.storage_backend = storage_backend if storage_backend is not None else MockStorageBackend()
         self.buffer_capacity_blocks = buffer_capacity_blocks
@@ -78,6 +84,11 @@ class RealInferencePrefetchAdapter:
         self.kv_heads_per_block = kv_heads_per_block
         self.head_dim = head_dim
         self.dtype_str = str(dtype).lower()
+        self.num_layers = num_layers
+        self.enable_async_pipeline = enable_async_pipeline
+        self.max_async_workers = max_async_workers
+        self._executor: Optional[ThreadPoolExecutor] = None
+        self._executor_lock = threading.Lock()
 
         self.bytes_per_elem = 4 if self.dtype_str in ("fp32", "float32") else (2 if self.dtype_str in ("fp16", "float16", "bf16") else 1)
         self.np_dtype = np.float32 if self.bytes_per_elem == 4 else (np.float16 if self.bytes_per_elem == 2 else np.int8)
@@ -92,7 +103,7 @@ class RealInferencePrefetchAdapter:
         self._block_payloads: Dict[Tuple[int, int], Dict[str, Any]] = {}
 
         # Predictive prefetch model (inter-layer attention locality)
-        self.predictor = NextLayerPredictor()
+        self.predictor = NextLayerPredictor(total_layers=num_layers)
 
         # Underlying V2Prefetcher simulation reference if needed
         if isinstance(self.storage_backend, StorageBackend):
@@ -128,6 +139,14 @@ class RealInferencePrefetchAdapter:
         # Optimization C: Batch request tracking
         self.storage_batches: int = 0
         self.batched_requests: int = 0
+
+        # Phase 8: Asynchronous Storage & Critical-Path Telemetry
+        self.request_submit_s: float = 0.0
+        self.request_completion_wait_s: float = 0.0
+        self.raw_storage_time_s: float = 0.0
+        self.zero_wait_hits: int = 0
+        self.partial_wait_hits: int = 0
+        self.misses: int = 0
 
         # P1 interface compatibility counters
         self._blocks_written: int = 0
@@ -187,6 +206,67 @@ class RealInferencePrefetchAdapter:
             if not oldest_entry.is_useful:
                 self.useless_prefetches += 1
                 self.wasted_bytes += oldest_entry.size_bytes
+
+    def _ensure_executor(self) -> ThreadPoolExecutor:
+        """Lazily initializes the background ThreadPoolExecutor."""
+        if self._executor is None:
+            with self._executor_lock:
+                if self._executor is None:
+                    self._executor = ThreadPoolExecutor(
+                        max_workers=self.max_async_workers,
+                        thread_name_prefix="aissd_async_io",
+                    )
+        return self._executor
+
+    def _fetch_block_batch_sync(
+        self,
+        layer_id: int,
+        block_ids: List[int],
+        head_id: int = 0,
+        token_start: int = 0,
+    ) -> Tuple[Dict[int, Tuple[np.ndarray, np.ndarray]], float]:
+        """Synchronously retrieves a batch of blocks from underlying storage and measures raw storage time."""
+        t0 = time.perf_counter()
+        if hasattr(self.storage_backend, "read_block_batch"):
+            fetched = self.storage_backend.read_block_batch(
+                layer_idx=layer_id,
+                block_ids=block_ids,
+                head_id=head_id,
+                token_start=token_start,
+            )
+        else:
+            fetched = {}
+            for bid in block_ids:
+                fetched[bid] = self.read_block(layer_id, bid, head_id, token_start)
+        raw_elapsed = time.perf_counter() - t0
+        return fetched, raw_elapsed
+
+    def _resolve_entry(self, entry: StagedInferenceBlock) -> None:
+        """Awaits and resolves a pending background future if present."""
+        if entry.future is None:
+            return
+        fut = entry.future
+        if fut.done():
+            batch_dict, raw_elapsed = fut.result()
+            self.raw_storage_time_s += raw_elapsed
+            self.zero_wait_hits += 1
+        else:
+            t_wait_start = time.perf_counter()
+            batch_dict, raw_elapsed = fut.result()
+            wait_s = time.perf_counter() - t_wait_start
+            self.request_completion_wait_s += wait_s
+            self.raw_storage_time_s += raw_elapsed
+            self.partial_wait_hits += 1
+
+        # Populate all blocks from this batch into the staging entries
+        for b_id, (k_arr, v_arr) in batch_dict.items():
+            k_key = (entry.layer_id, b_id)
+            if k_key in self._staging_buffer:
+                e = self._staging_buffer[k_key]
+                e.data_k = k_arr
+                e.data_v = v_arr
+                e.ready_time_ns = time.perf_counter_ns()
+                e.future = None
 
     def _format_tensor(self, arr: Union[np.ndarray, bytes], default_shape: Tuple[int, ...]) -> np.ndarray:
         """Ensures an array is a contiguous float32 numpy array with proper shape."""
@@ -360,6 +440,7 @@ class RealInferencePrefetchAdapter:
         head_id: int = 0,
         token_start: int = 0,
         sub_page: str = "BOTH",
+        async_mode: Optional[bool] = None,
         **kwargs,
     ) -> List[int]:
         """
@@ -372,6 +453,7 @@ class RealInferencePrefetchAdapter:
             head_id: KV head index.
             token_start: Sequence position offset.
             sub_page: "KEY", "VALUE", or "BOTH".
+            async_mode: If True, dispatches request asynchronously in background thread.
             
         Returns:
             List of successfully pre-staged block IDs.
@@ -383,7 +465,48 @@ class RealInferencePrefetchAdapter:
         for _ in miss_bids:
             self._ensure_buffer_capacity()
 
+        is_async = async_mode if async_mode is not None else self.enable_async_pipeline
+
+        if is_async:
+            t_sub_start = time.perf_counter()
+            staged_ns = time.perf_counter_ns()
+            future = self._ensure_executor().submit(
+                self._fetch_block_batch_sync,
+                layer_id,
+                miss_bids,
+                head_id,
+                token_start,
+            )
+
+            dispatched = []
+            for bid in miss_bids:
+                key = (layer_id, bid)
+                entry = StagedInferenceBlock(
+                    block_id=bid,
+                    layer_id=layer_id,
+                    head_id=head_id,
+                    size_bytes=self.bytes_per_block,
+                    data_k=None,
+                    data_v=None,
+                    future=future,
+                    staged_time_ns=staged_ns,
+                    ready_time_ns=0,
+                    is_useful=False,
+                    is_late=False,
+                    metadata=self._block_meta.get(key, {}),
+                )
+                self._staging_buffer[key] = entry
+                self.prefetch_requests += 1
+                self.prefetched_bytes += self.bytes_per_block
+                dispatched.append(bid)
+
+            self.request_submit_s += time.perf_counter() - t_sub_start
+            self.peak_memory_bytes = max(self.peak_memory_bytes, self.current_memory_bytes)
+            return dispatched
+
+        # Synchronous fallback path
         staged_ns = time.perf_counter_ns()
+        t0 = time.perf_counter()
         fetched_blocks = {}
         if hasattr(self.storage_backend, "read_block_batch"):
             fetched_blocks = self.storage_backend.read_block_batch(
@@ -392,6 +515,7 @@ class RealInferencePrefetchAdapter:
                 head_id=head_id,
                 token_start=token_start,
             )
+        self.raw_storage_time_s += time.perf_counter() - t0
 
         dispatched = []
         for bid in miss_bids:
@@ -467,6 +591,7 @@ class RealInferencePrefetchAdapter:
         current_layer_id: int,
         current_block_ids: List[int],
         stride: int = 0,
+        async_mode: Optional[bool] = None,
     ) -> Tuple[int, List[int]]:
         """Predicts candidate blocks for next layer (L+1) and pre-stages them into DRAM."""
         next_layer, predicted_bids = self.predictor.predict_next_layer_blocks(
@@ -474,7 +599,8 @@ class RealInferencePrefetchAdapter:
             current_block_ids=current_block_ids,
             stride=stride,
         )
-        dispatched = self.prefetch(block_ids=predicted_bids, layer_id=next_layer)
+        is_async = async_mode if async_mode is not None else self.enable_async_pipeline
+        dispatched = self.prefetch(block_ids=predicted_bids, layer_id=next_layer, async_mode=is_async)
         return next_layer, dispatched
 
     # -------------------------------------------------------------------------
@@ -518,6 +644,7 @@ class RealInferencePrefetchAdapter:
 
         if key in self._staging_buffer:
             entry = self._staging_buffer[key]
+            self._resolve_entry(entry)
             self._staging_buffer.move_to_end(key)
             elapsed_us = (time.perf_counter_ns() - t_start_ns) / 1000.0
 
@@ -533,6 +660,8 @@ class RealInferencePrefetchAdapter:
             return np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype)
 
         # Demand Miss
+        self.misses += 1
+        t_miss0 = time.perf_counter()
         if hasattr(self.storage_backend, "read_key_page"):
             k_tensor = self.storage_backend.read_key_page(
                 layer_idx=layer_idx,
@@ -556,6 +685,10 @@ class RealInferencePrefetchAdapter:
             k_tensor = np.frombuffer(raw, dtype=self.np_dtype)
         else:
             k_tensor = np.zeros((self.tokens_per_block, self.kv_heads_per_block, self.head_dim), dtype=self.np_dtype)
+
+        miss_s = time.perf_counter() - t_miss0
+        self.raw_storage_time_s += miss_s
+        self.request_completion_wait_s += miss_s
 
         elapsed_us = (time.perf_counter_ns() - t_start_ns) / 1000.0
         self.record_miss(layer_id=layer_idx, block_id=block_id, sub_page="KEY", size_bytes=KEY_PAGE_BYTES, latency_us=elapsed_us)
@@ -582,6 +715,7 @@ class RealInferencePrefetchAdapter:
 
         if key in self._staging_buffer:
             entry = self._staging_buffer[key]
+            self._resolve_entry(entry)
             self._staging_buffer.move_to_end(key)
             elapsed_us = (time.perf_counter_ns() - t_start_ns) / 1000.0
 
@@ -597,6 +731,8 @@ class RealInferencePrefetchAdapter:
             return np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype)
 
         # Demand Miss
+        self.misses += 1
+        t_miss0 = time.perf_counter()
         if hasattr(self.storage_backend, "read_value_page"):
             v_tensor = self.storage_backend.read_value_page(
                 layer_idx=layer_idx,
@@ -620,6 +756,10 @@ class RealInferencePrefetchAdapter:
             v_tensor = np.frombuffer(raw, dtype=self.np_dtype)
         else:
             v_tensor = np.zeros((self.tokens_per_block, self.kv_heads_per_block, self.head_dim), dtype=self.np_dtype)
+
+        miss_s = time.perf_counter() - t_miss0
+        self.raw_storage_time_s += miss_s
+        self.request_completion_wait_s += miss_s
 
         elapsed_us = (time.perf_counter_ns() - t_start_ns) / 1000.0
         self.record_miss(layer_id=layer_idx, block_id=block_id, sub_page="VALUE", size_bytes=VALUE_PAGE_BYTES, latency_us=elapsed_us)
@@ -645,6 +785,7 @@ class RealInferencePrefetchAdapter:
 
         if key in self._staging_buffer:
             entry = self._staging_buffer[key]
+            self._resolve_entry(entry)
             self._staging_buffer.move_to_end(key)
             elapsed_us = (time.perf_counter_ns() - t_start_ns) / 1000.0
 
@@ -654,15 +795,19 @@ class RealInferencePrefetchAdapter:
                 self.useful_bytes += self.bytes_per_block
 
             self.record_hit(layer_id=layer_idx, block_id=block_id, sub_page="BOTH", size_bytes=self.bytes_per_block, latency_us=elapsed_us)
-            if entry.data_k is not None and entry.data_v is not None:
-                return entry.data_k, entry.data_v
             shape = self._block_meta.get(key, {}).get("shape", (self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
+            if entry.data_k is not None and entry.data_v is not None:
+                k_ret = entry.data_k.reshape(shape) if entry.data_k.shape != shape else entry.data_k
+                v_ret = entry.data_v.reshape(shape) if entry.data_v.shape != shape else entry.data_v
+                return k_ret, v_ret
             raw = entry.data or b"\x00" * self.bytes_per_block
             k_ret = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype).reshape(shape)
             v_ret = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype).reshape(shape)
             return k_ret, v_ret
 
         # Demand Miss
+        self.misses += 1
+        t_miss0 = time.perf_counter()
         if hasattr(self.storage_backend, "read_block"):
             k_tensor, v_tensor = self.storage_backend.read_block(
                 layer_idx=layer_idx,
@@ -690,6 +835,10 @@ class RealInferencePrefetchAdapter:
         else:
             k_tensor = np.zeros((self.tokens_per_block, self.kv_heads_per_block, self.head_dim), dtype=self.np_dtype)
             v_tensor = np.zeros((self.tokens_per_block, self.kv_heads_per_block, self.head_dim), dtype=self.np_dtype)
+
+        miss_s = time.perf_counter() - t_miss0
+        self.raw_storage_time_s += miss_s
+        self.request_completion_wait_s += miss_s
 
         elapsed_us = (time.perf_counter_ns() - t_start_ns) / 1000.0
         self.record_miss(layer_id=layer_idx, block_id=block_id, sub_page="BOTH", size_bytes=self.bytes_per_block, latency_us=elapsed_us)
@@ -799,21 +948,26 @@ class RealInferencePrefetchAdapter:
             key = (layer_idx, bid)
             if key in self._staging_buffer:
                 entry = self._staging_buffer[key]
+                self._resolve_entry(entry)
                 self._staging_buffer.move_to_end(key)
                 if not entry.is_useful:
                     entry.is_useful = True
                     self.useful_prefetches += 1
                     self.useful_bytes += KEY_PAGE_BYTES
                 self.record_hit(layer_id=layer_idx, block_id=bid, sub_page="KEY", size_bytes=KEY_PAGE_BYTES, latency_us=0.0)
+                shape = self._block_meta.get(key, {}).get("shape", (self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
                 if entry.data_k is not None:
-                    results[bid] = entry.data_k
+                    k_tensor = entry.data_k.reshape(shape) if entry.data_k.shape != shape else entry.data_k
+                    results[bid] = k_tensor
                 else:
                     raw = entry.data or b"\x00" * self.bytes_per_block
-                    results[bid] = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype)
+                    results[bid] = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype).reshape(shape)
             else:
                 miss_bids.append(bid)
+                self.misses += 1
 
         if miss_bids:
+            t_miss0 = time.perf_counter()
             if hasattr(self.storage_backend, "read_key_page_batch"):
                 fetched = self.storage_backend.read_key_page_batch(
                     layer_idx=layer_idx,
@@ -825,6 +979,9 @@ class RealInferencePrefetchAdapter:
             else:
                 for bid in miss_bids:
                     results[bid] = self.read_key_page(layer_idx, bid, head_id, token_start)
+            miss_elapsed = time.perf_counter() - t_miss0
+            self.raw_storage_time_s += miss_elapsed
+            self.request_completion_wait_s += miss_elapsed
 
             elapsed_us = (time.perf_counter_ns() - t_start_ns) / 1000.0
             num_misses = len(miss_bids)
@@ -858,21 +1015,26 @@ class RealInferencePrefetchAdapter:
             key = (layer_idx, bid)
             if key in self._staging_buffer:
                 entry = self._staging_buffer[key]
+                self._resolve_entry(entry)
                 self._staging_buffer.move_to_end(key)
                 if not entry.is_useful:
                     entry.is_useful = True
                     self.useful_prefetches += 1
                     self.useful_bytes += VALUE_PAGE_BYTES
                 self.record_hit(layer_id=layer_idx, block_id=bid, sub_page="VALUE", size_bytes=VALUE_PAGE_BYTES, latency_us=0.0)
+                shape = self._block_meta.get(key, {}).get("shape", (self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
                 if entry.data_v is not None:
-                    results[bid] = entry.data_v
+                    v_tensor = entry.data_v.reshape(shape) if entry.data_v.shape != shape else entry.data_v
+                    results[bid] = v_tensor
                 else:
                     raw = entry.data or b"\x00" * self.bytes_per_block
-                    results[bid] = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype)
+                    results[bid] = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype).reshape(shape)
             else:
                 miss_bids.append(bid)
+                self.misses += 1
 
         if miss_bids:
+            t_miss0 = time.perf_counter()
             if hasattr(self.storage_backend, "read_value_page_batch"):
                 fetched = self.storage_backend.read_value_page_batch(
                     layer_idx=layer_idx,
@@ -884,6 +1046,9 @@ class RealInferencePrefetchAdapter:
             else:
                 for bid in miss_bids:
                     results[bid] = self.read_value_page(layer_idx, bid, head_id, token_start)
+            miss_elapsed = time.perf_counter() - t_miss0
+            self.raw_storage_time_s += miss_elapsed
+            self.request_completion_wait_s += miss_elapsed
 
             elapsed_us = (time.perf_counter_ns() - t_start_ns) / 1000.0
             num_misses = len(miss_bids)
@@ -916,23 +1081,29 @@ class RealInferencePrefetchAdapter:
             key = (layer_idx, bid)
             if key in self._staging_buffer:
                 entry = self._staging_buffer[key]
+                self._resolve_entry(entry)
                 self._staging_buffer.move_to_end(key)
                 if not entry.is_useful:
                     entry.is_useful = True
                     self.useful_prefetches += 1
                     self.useful_bytes += self.bytes_per_block
                 self.record_hit(layer_id=layer_idx, block_id=bid, sub_page="BOTH", size_bytes=self.bytes_per_block, latency_us=0.0)
+                shape = self._block_meta.get(key, {}).get("shape", (self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
                 if entry.data_k is not None and entry.data_v is not None:
-                    results[bid] = (entry.data_k, entry.data_v)
+                    k_tensor = entry.data_k.reshape(shape) if entry.data_k.shape != shape else entry.data_k
+                    v_tensor = entry.data_v.reshape(shape) if entry.data_v.shape != shape else entry.data_v
+                    results[bid] = (k_tensor, v_tensor)
                 else:
                     raw = entry.data or b"\x00" * self.bytes_per_block
-                    k_ret = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype)
-                    v_ret = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype)
+                    k_ret = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype).reshape(shape)
+                    v_ret = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype).reshape(shape)
                     results[bid] = (k_ret, v_ret)
             else:
                 miss_bids.append(bid)
+                self.misses += 1
 
         if miss_bids:
+            t_miss0 = time.perf_counter()
             if hasattr(self.storage_backend, "read_block_batch"):
                 fetched = self.storage_backend.read_block_batch(
                     layer_idx=layer_idx,
@@ -944,6 +1115,9 @@ class RealInferencePrefetchAdapter:
             else:
                 for bid in miss_bids:
                     results[bid] = self.read_block(layer_idx, bid, head_id, token_start)
+            miss_elapsed = time.perf_counter() - t_miss0
+            self.raw_storage_time_s += miss_elapsed
+            self.request_completion_wait_s += miss_elapsed
 
             elapsed_us = (time.perf_counter_ns() - t_start_ns) / 1000.0
             num_misses = len(miss_bids)
@@ -1077,6 +1251,15 @@ class RealInferencePrefetchAdapter:
             "demand_hit_avg_latency_us": round(hit_avg_lat, 2),
             "demand_miss_avg_latency_us": round(miss_avg_lat, 2),
 
+            # Phase 8: Asynchronous Storage & Pipelining Telemetry
+            "enable_async_pipeline": self.enable_async_pipeline,
+            "request_submit_s": round(self.request_submit_s, 4),
+            "request_completion_wait_s": round(self.request_completion_wait_s, 4),
+            "raw_storage_time_s": round(self.raw_storage_time_s, 4),
+            "zero_wait_hits": self.zero_wait_hits,
+            "partial_wait_hits": self.partial_wait_hits,
+            "misses": self.misses,
+
             # Underlying Backend
             "storage_backend": backend_telem,
         }
@@ -1105,6 +1288,12 @@ class RealInferencePrefetchAdapter:
         self.peak_memory_bytes = 0
         self.storage_batches = 0
         self.batched_requests = 0
+        self.request_submit_s = 0.0
+        self.request_completion_wait_s = 0.0
+        self.raw_storage_time_s = 0.0
+        self.zero_wait_hits = 0
+        self.partial_wait_hits = 0
+        self.misses = 0
         self._blocks_written = 0
         self._bytes_written = 0
         if hasattr(self.storage_backend, "reset_stats"):
@@ -1125,5 +1314,8 @@ class RealInferencePrefetchAdapter:
 
     def close(self) -> None:
         """Closes storage backend and releases resources."""
+        if self._executor is not None:
+            self._executor.shutdown(wait=False)
+            self._executor = None
         if hasattr(self.storage_backend, "close"):
             self.storage_backend.close()
