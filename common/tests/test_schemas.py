@@ -3,7 +3,6 @@ from common.schemas.kv_block import KVBlock, StorageTier
 from common.schemas.request import KVRequest, KVOperation
 from common.schemas.result import KVResponse, OperationStatus
 from common.schemas.metrics import SystemMetrics, MemoryMetrics, LatencyMetrics, StorageMetrics, PrefetchMetrics, FTLMetrics
-from common.constants import DEFAULT_BLOCK_SIZE_BYTES
 
 
 def test_kv_block_defaults():
@@ -17,16 +16,15 @@ def test_kv_block_defaults():
         head_dim=128,
         dtype="FP16",
     )
-    assert block.key_size_bytes == 2048
-    assert block.value_size_bytes == 2048
-    assert block.total_size_bytes == DEFAULT_BLOCK_SIZE_BYTES
-    assert block.total_size_bytes == 4096
+    assert block.key_size_bytes == 4096
+    assert block.value_size_bytes == 4096
+    assert block.total_size_bytes == 8192
 
     # Test dictionary serialization round-trip
     d = block.to_dict()
     restored = KVBlock.from_dict(d)
     assert restored.block_id == 1
-    assert restored.total_size_bytes == 4096
+    assert restored.total_size_bytes == 8192
 
 
 def test_kv_block_fp8():
@@ -40,9 +38,9 @@ def test_kv_block_fp8():
         head_dim=128,
         dtype="FP8",
     )
-    assert block.key_size_bytes == 1024
-    assert block.value_size_bytes == 1024
-    assert block.total_size_bytes == 2048
+    assert block.key_size_bytes == 2048
+    assert block.value_size_bytes == 2048
+    assert block.total_size_bytes == 4096
 
 
 def test_request_response_serialization():

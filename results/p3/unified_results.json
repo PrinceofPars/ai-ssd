@@ -1,25 +1,25 @@
 {
   "evaluation_title": "AI-SSD V2 Phase 3: Real Prefetch & End-to-End System Evaluation",
-  "timestamp_utc": "2026-10-02T20:53:25.842541Z",
+  "timestamp_utc": "2026-10-03T11:07:38.122775Z",
   "provenance": {
     "environment": {
-      "git_commit": "28d30ec173b22dc165698cf1ff4d286ba4c14f12",
-      "git_branch": "v2/p3-system-integration",
+      "git_commit": "32dad1aa2246f0ab2b960560fb9f2a5f2f4e99fc",
+      "git_branch": "v2-real-llm-kvssd",
       "hostname": "ip-172-31-27-77",
       "cpu_model": "Intel(R) Xeon(R) Platinum 8488C",
       "cpu_count": 8,
-      "ram_total_gb": 61.77,
-      "kernel": "6.5.0-1020-aws",
-      "os_name": "Linux-6.5.0-1020-aws-x86_64-with-glibc2.35",
+      "ram_total_gb": 61.78,
+      "kernel": "6.8.0-1065-aws",
+      "os_name": "Linux-6.8.0-1065-aws-x86_64-with-glibc2.35",
       "python_version": "3.10.12",
       "dependency_versions": {
         "numpy": "2.2.6",
-        "pydantic": "2.13.5",
+        "pydantic": "not_installed",
         "pytest": "9.1.1",
-        "pandas": "2.3.3",
+        "pandas": "not_installed",
         "yaml": "6.0.3"
       },
-      "timestamp": "2026-10-02T20:53:25.653685Z"
+      "timestamp": "2026-10-03T11:07:37.929297Z"
     },
     "trace": {
       "file_path": "/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.jsonl",
@@ -279,7 +279,7 @@
     "classification": "VIRTUAL-DEVICE",
     "device_image": "/opt/ai-ssd-v2/images/v2_nvme.raw",
     "device_size_bytes": 1073741824,
-    "raw_block_read_latency_us": 9.52,
+    "raw_block_read_latency_us": 10.29,
     "file_backend_verified": true,
     "qemu_guest_benchmarks": {
       "seq_read_64k": {

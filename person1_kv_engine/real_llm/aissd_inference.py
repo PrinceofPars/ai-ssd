@@ -30,6 +30,8 @@ _P2_AVAILABLE = False
 RealInferenceStorageBackend = None
 
 _candidate_p2_paths = [
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")),
+    "/home/ubuntu/ai-ssd",
     "/home/ubuntu/ai-ssd-p2",
     os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../ai-ssd-p2")),
 ]
@@ -54,6 +56,8 @@ _P3_AVAILABLE = False
 RealInferencePrefetchAdapter = None
 
 _candidate_p3_paths = [
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")),
+    "/home/ubuntu/ai-ssd",
     "/home/ubuntu/ai-ssd-p3",
     os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../ai-ssd-p3")),
 ]

@@ -87,8 +87,11 @@ class KVBlock:
         """
         bytes_per_elem = 4 if dtype.upper() == "FP32" else (2 if dtype.upper() == "FP16" else 1)
         calc_page_size = token_count * kv_head_count * head_dim * bytes_per_elem
-        # Standard page size is 4096 bytes
-        page_size = calc_page_size if calc_page_size > 0 else KEY_PAGE_BYTES
+        # Standard page size is 4096 bytes (or 0 for empty block)
+        if token_count == 0:
+            page_size = 0
+        else:
+            page_size = calc_page_size if calc_page_size > 0 else KEY_PAGE_BYTES
 
         return cls(
             block_id=block_id,
