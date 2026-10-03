@@ -18,14 +18,14 @@ Worktree:
 
 ## Current State
 
-PHASE 3 COMPLETE — REAL PREFETCH & END-TO-END SYSTEM EVALUATION VERIFIED
+PHASE 5C COMPLETE — REAL INFERENCE PREFETCH ADAPTER VERIFIED
 
 ---
 
 ## Current Session
 
 Session ID:
-S04-V2-PHASE3-EVAL
+S05-V2-PHASE5C-INFERENCE-ADAPTER
 
 Started:
 2026-10-03T02:00:00+05:30
@@ -48,6 +48,16 @@ Phase 3: Real Prefetch Evaluation, System Ablations, Virtual NVMe Baseline, and 
 ---
 
 ## Completed
+
+- **Phase 5C Real Inference Prefetch Adapter (`person3_system/prefetch/inference_adapter.py`)**:
+  - Implemented `RealInferencePrefetchAdapter` exposing `V2Prefetcher` directly to real LLM inference loops (P1).
+  - Returns actual tensor data (`[kv_heads, tokens, head_dim]` in FP32) or raw byte slices (`KEY` 4KB, `VALUE` 4KB, `BOTH` 8KB).
+  - Directly ingests `KVBlockAdapter.blockize_layer()` output via `register_blocks_from_adapter()`.
+  - Non-blocking speculative prefetch with LRU host DRAM staging buffer and background storage I/O.
+  - Full metric tracking: demand reads, prefetch requests, useful prefetches, late prefetches, useless prefetches, bytes, latencies.
+  - Zero artificial latency injection; no analytical 620.88 tok/s model dependencies.
+  - Added 10 comprehensive tests in `tests/test_inference_prefetch_adapter.py` (37/37 tests passing across P3).
+  - Authored `docs/v2/P3_REAL_INFERENCE_PREFETCH.md`.
 
 - **Phase 3 Real Prefetch Evaluation (`benchmarks/run_phase3_eval.py`)**:
   - Replayed real Qwen2.5-0.5B KV trace (7,872 events, 512 context tokens) across 4 prefetch configurations:
