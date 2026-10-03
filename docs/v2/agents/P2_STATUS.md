@@ -18,92 +18,82 @@ Worktree:
 
 ## Current State
 
-PHASE 3 COMPLETE — REAL TRACE FTL & STORAGE EVALUATION VERIFIED (2.65x SPEEDUP)
+PHASE 5B COMPLETE — REAL INFERENCE STORAGE BACKEND ADAPTER DELIVERED
 
 ---
 
 ## Current Session
 
 Session ID:
-SESSION-P2-V2-004
+SESSION-P2-V2-005
 
 Started:
-2026-10-03T01:45:00+05:30
+2026-10-03T10:30:00+05:30
 
 Last Updated:
-2026-10-03T02:20:00+05:30
+2026-10-03T10:50:00+05:30
 
 ---
 
 ## Current Milestone
 
-M3 (Real-LLM Trace FTL & Virtual NVMe Storage Evaluation)
+M5B (Real Inference Storage Backend Adapter for P1 Inference Loop)
 
 ---
 
 ## Current Task
 
-Completed Phase 3 Real-Trace FTL Evaluation & Virtual NVMe Benchmarking.
+Expose tensor-aware FTL/mapper through callable storage interface for P1 real Qwen inference.
 
 ---
 
 ## Completed
 
-1. **Analytical FTL Evaluation on Canonical Real LLM Trace**:
-   - Replayed `/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.jsonl` (7,872 events, SHA-256: `8e58da7ba45ffc4a9fa84571c5c9a96250cd58488aa17be01205f282b3b6cab9`).
-   - Evaluated Conventional FTL vs Tensor-Aware FTL:
-     * Conventional FTL: 180.00 ms simulated service time, 8.00x contention ratio (100% load on Channel 0).
-     * Tensor-Aware FTL: 67.80 ms simulated service time, 1.01x contention ratio (972 to 995 reqs/channel, sigma = 8.1).
-     * **Speedup: 2.65x** (independently reproduced and validated).
-   - Saved report: `/opt/ai-ssd-v2/results/p2/real_trace_ftl_evaluation.json`.
+1. **Real Inference Storage Backend Adapter (`RealInferenceStorageBackend`)**:
+   - Implemented in `person2_ssd/inference_backend.py` and exported via `person2_ssd/__init__.py`.
+   - Exposes clean Python-callable API: `store_kv`, `load_kv`, `load_key_page`, `load_value_page`, `evict_kv`, `get_telemetry`, `reset_telemetry`.
+   - Stores and returns real Key and Value tensors (`np.ndarray` and raw `bytes`), maintaining full numerical fidelity.
 
-2. **FTL Placement Policy Ablation Study**:
-   - Evaluated 4 distinct allocation policies:
-     * Conventional Baseline: 180.00 ms, 8.00x contention, max load 7,872 (1.00x).
-     * Naive Block RR: 50.94 ms, 1.20x contention, max load 1,184 (3.53x).
-     * Head-Only Striping: 126.84 ms, 5.10x contention, max load 5,024 (1.42x) — demonstrates GQA head starvation on 2-KV-head architectures.
-     * Tensor-Aware Co-Design: 67.80 ms, 1.01x contention, max load 995 (2.65x) — uniform multi-channel distribution across layers, heads, and blocks.
-   - Saved report: `/opt/ai-ssd-v2/results/p2/ftl_placement_ablations.json`.
+2. **Preserved Page Geometry Contract**:
+   - Key Page: exactly 4,096 B (4 KiB)
+   - Value Page: exactly 4,096 B (4 KiB)
+   - Combined KV Block: 8,192 B (8 KiB)
+   - Programmatically validates payload sizes on every store/load call.
 
-3. **Multi-Dimension Sensitivity Experiments**:
-   - Channel Scaling: C in {2, 4, 8, 16, 32} yields speedups of 1.65x, 2.09x, 2.65x, 3.65x, 4.34x.
-   - Queue Depth Sensitivity: QD in {1, 4, 8, 16, 32, 64} yields speedups of 1.00x (serial), 2.04x, 2.65x, 3.17x, 3.92x, 5.26x.
-   - Phase Decomposition:
-     * Prefill Write (2,112 events, 16.5 MiB): 1.00x (uniform ingest).
-     * Decode Read (2,304 events, 18.0 MiB): 1.92x speedup.
-     * Top-K Filter Read (384 events, 123.0 MiB): 6.25x speedup.
-     * Top-K Fetch Read (3,072 events, 12.0 MiB): 3.11x speedup.
-   - Flash Timing Sensitivity: SLC (2.54x), MLC baseline (2.65x), QLC (2.74x).
-   - Saved reports: `/opt/ai-ssd-v2/results/p2/ftl_channel_sensitivity.json`, `/opt/ai-ssd-v2/results/p2/ftl_queue_sensitivity.json`.
+3. **Multi-Channel Hardware Mapping via DeterministicTensorMapper**:
+   - Translates `(layer_id, head_id, token_start / block_id)` through `DeterministicTensorMapper` to derive:
+     * LBA Address (64-bit sector offset in NVMe namespace)
+     * NAND Physical Coordinate (channel, die, plane, block, page)
+   - Applies proven formula $\text{Channel} = (L + h + b_{\text{idx}} + \lfloor b_{\text{idx}} / C \rfloor) \pmod C$ ensuring uniform 8-channel distribution without 2-head GQA bottleneck.
 
-4. **Executable Virtual NVMe Benchmarks (QEMU / KVM)**:
-   - Evaluated PCI NVMe 1.4 emulated block device inside customized Linux guest initramfs with FIO 3.28:
-     * Sequential Read 64K: 25,587.5 IOPS, 1,599.22 MB/s, 155.70 us avg latency, 189.44 us p99.
-     * Sequential Write 64K: 19,622.8 IOPS, 1,226.42 MB/s, 203.04 us avg latency, 329.73 us p99.
-     * Random Read 4K: 22,914.7 IOPS, 89.51 MB/s, 348.39 us avg latency, 387.07 us p99.
-     * Random Write 4K: 22,688.8 IOPS, 88.63 MB/s, 351.81 us avg latency, 387.07 us p99.
-     * Random Read 8K: 22,339.2 IOPS, 174.53 MB/s, 357.28 us avg latency, 387.07 us p99.
-   - Saved report: `/opt/ai-ssd-v2/results/p2/virtual_nvme_benchmarks.json`.
+4. **Zero Simulated Sleep Latency**:
+   - Zero `time.sleep()` calls in storage paths.
+   - Live inference executes at line memory speed (< 0.15s for 200 I/O operations).
+   - Analytical MLC flash service times are computed mathematically and reported in telemetry.
 
-5. **FEMU Feasibility Analysis & Documentation**:
-   - Documented rationale for retaining QEMU native PCI NVMe over in-tree FEMU rebuild (build resource contention on EC2 instance, C-level FTL inflexibility vs Python analytical FTL simulator).
-   - Authored comprehensive documentation in `docs/v2/P2_PHASE3_RESULTS.md`.
+5. **Classification Discipline**:
+   - Reported as `ANALYTICAL` (`"backend_classification": "ANALYTICAL"`).
 
-6. **Full Test Suite Verification**:
-   - `person2_ssd/tests/`: 39/39 tests passed (100% pass rate).
+6. **Full Test Suite & Validation**:
+   - Added `person2_ssd/tests/test_inference_backend.py` with 7 comprehensive unit tests (all passed in 0.07s).
+   - Complete P2 test suite passes 46/46 tests (100% pass rate).
+   - Validated Phase-3 reproduction script continues to reproduce 2.65x analytical speedup cleanly.
+
+7. **Documentation**:
+   - Authored `docs/v2/P2_REAL_INFERENCE_BACKEND.md`.
 
 ---
 
 ## Working On
 
-Phase 3 deliverables complete. Ready for P3 end-to-end integration and synthesis.
+Phase 5B complete. Ready for P1 to invoke `RealInferenceStorageBackend` during real Qwen inference.
 
 ---
 
 ## Next
 
-1. Support P3 in synthesizing full-system cross-agent findings.
-2. Maintain `DeterministicTensorMapper` and analytical FTL models for downstream experiments.
+1. Support P1 integration with `from person2_ssd.inference_backend import RealInferenceStorageBackend`.
+2. Provide real-time channel telemetry analysis on P1's live inference runs.
 
 ---
 
@@ -115,19 +105,16 @@ Phase 3 deliverables complete. Ready for P3 end-to-end integration and synthesis
 
 ## Dependencies
 
-- P1 canonical trace consumed and verified.
+- None.
 
 ---
 
-## Artifacts Created
+## Artifacts Created / Modified
 
-- `person2_ssd/experiments/phase3_real_trace_eval.py`
-- `scripts/run_virtual_nvme_bench.py`
-- `scripts/build_initramfs.py`
-- `docs/v2/P2_PHASE3_RESULTS.md`
-- `/opt/ai-ssd-v2/results/p2/real_trace_ftl_evaluation.json`
-- `/opt/ai-ssd-v2/results/p2/ftl_placement_ablations.json`
-- `/opt/ai-ssd-v2/results/p2/ftl_channel_sensitivity.json`
-- `/opt/ai-ssd-v2/results/p2/ftl_queue_sensitivity.json`
-- `/opt/ai-ssd-v2/results/p2/virtual_nvme_benchmarks.json`
-- Local raw copies in `results/raw/`
+- `person2_ssd/inference_backend.py` (New adapter engine)
+- `person2_ssd/__init__.py` (Export adapter)
+- `person2_ssd/tests/test_inference_backend.py` (New test suite, 7 tests)
+- `docs/v2/P2_REAL_INFERENCE_BACKEND.md` (Integration guide)
+- `docs/v2/STATUS.md` (Global status)
+- `docs/v2/agents/P2_STATUS.md` (P2 status)
+- `docs/v2/agents/P2_USAGE.md` (Usage log)
