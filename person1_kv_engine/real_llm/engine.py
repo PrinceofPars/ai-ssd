@@ -67,7 +67,7 @@ class RealLLMEngine:
             self.model_name,
             dtype=torch_dtype,
             device_map=self.device,
-            attn_implementation="eager",
+            attn_implementation="sdpa",
             low_cpu_mem_usage=True,
         )
         self.model.eval()

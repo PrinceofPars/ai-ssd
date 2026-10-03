@@ -1,0 +1,86 @@
+{
+  "timestamp_utc": "2026-10-03T12:22:50.799158Z",
+  "benchmark_metadata": {
+    "model": "Qwen/Qwen3-4B-Instruct-2507",
+    "context_length": 4096,
+    "decode_tokens": 16,
+    "threads": 4,
+    "dtype": "float32",
+    "seed": 42,
+    "repetitions": 3
+  },
+  "baseline": {
+    "wall_time_mean_s": 16.836394681666814,
+    "wall_time_std_s": 0.3712310652549358,
+    "throughput_mean_tok_s": 0.9507814676059688,
+    "throughput_std_tok_s": 0.02083020664675421,
+    "min_rss_mean_mb": 19513.05078125,
+    "min_rss_std_mb": 103.28411971437103,
+    "avg_rss_mean_mb": 19684.098303860766,
+    "avg_rss_std_mb": 106.99883517669934,
+    "peak_rss_mean_mb": 19950.102864583332,
+    "peak_rss_std_mb": 134.64560236343672,
+    "peak_rss_mb": 20095.0078125,
+    "kv_memory_mb": 1156.5,
+    "non_kv_ram_peak_mb": 18793.602864583332
+  },
+  "ai_ssd": {
+    "wall_time_mean_s": 10.53503782966709,
+    "wall_time_std_s": 0.08698127498921242,
+    "throughput_mean_tok_s": 1.5188450390985302,
+    "throughput_std_tok_s": 0.012531002516590993,
+    "min_rss_mean_mb": 24111.861979166668,
+    "min_rss_std_mb": 101.42858982132921,
+    "avg_rss_mean_mb": 24181.429822573453,
+    "avg_rss_std_mb": 10.204539424538869,
+    "peak_rss_mean_mb": 24205.522135416668,
+    "peak_rss_std_mb": 0.6106118368662539,
+    "peak_rss_mb": 24206.09375,
+    "kv_active_dram_mb": 122.625,
+    "kv_offload_pct": 89.39430795426904,
+    "kv_blocks_read": 151740,
+    "non_kv_ram_peak_mb": 24082.897135416668
+  },
+  "storage": {
+    "bytes_read": 621527040,
+    "total_requests": 165780,
+    "channels_active": 8,
+    "channel_reads": {
+      "0": 18397,
+      "1": 18514,
+      "2": 18270,
+      "3": 18257,
+      "4": 18118,
+      "5": 18148,
+      "6": 18361,
+      "7": 18473
+    },
+    "load_imbalance_pct": 1.07,
+    "contention_ratio": 1.01
+  },
+  "prefetch": {
+    "demand_requests": 151740,
+    "demand_hits": 19242,
+    "demand_misses": 132498,
+    "demand_hit_rate_pct": 12.68,
+    "prefetch_requests": 14040,
+    "useful_prefetches": 14014,
+    "useful_bytes": 57401344,
+    "wasted_bytes": 3407872,
+    "staging_memory_mb": 64.0,
+    "peak_memory_mb": 64.0
+  },
+  "top_k": {
+    "ratio": 0.1,
+    "percent": 10.0
+  },
+  "accuracy": {
+    "token_matches": 1,
+    "token_count": 16,
+    "token_match_pct": 6.25,
+    "logits_cosine_similarity": 0.0512608103454113,
+    "logits_mse": 35.51770782470703,
+    "baseline_text": " hardware accelerated attention scoring engine computes dot products between the query vector and candidate keys.",
+    "aissd_text": " hardware andity andity andization andization andization andization andization and"
+  }
+}

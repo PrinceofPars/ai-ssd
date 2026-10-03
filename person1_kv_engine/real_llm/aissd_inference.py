@@ -561,8 +561,15 @@ def run_aissd_decode(
                 input_shape = hidden_states.shape[:-1]
                 hidden_shape = (*input_shape, -1, attn_module.head_dim)
 
-                q = attn_module.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-                k = attn_module.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+                q_raw = attn_module.q_proj(hidden_states).view(hidden_shape)
+                k_raw = attn_module.k_proj(hidden_states).view(hidden_shape)
+                if hasattr(attn_module, "q_norm"):
+                    q_raw = attn_module.q_norm(q_raw)
+                if hasattr(attn_module, "k_norm"):
+                    k_raw = attn_module.k_norm(k_raw)
+
+                q = q_raw.transpose(1, 2)
+                k = k_raw.transpose(1, 2)
                 v = attn_module.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
 
                 cos, sin = position_embeddings
