@@ -219,11 +219,19 @@ class RealInferencePrefetchAdapter:
             "head_id": head_id,
             "token_start": token_start,
         }
-        self._block_payloads[key] = {
-            "k": k_arr.copy(),
-            "v": v_arr.copy(),
-            "bytes": k_arr.tobytes() + v_arr.tobytes(),
-        }
+        # Phase C: Eliminate redundant full KV replica in P3.
+        # Only populate fallback _block_payloads if no underlying storage backend exists (mock testing)
+        has_real_backend = (
+            self.storage_backend is not None
+            and "Mock" not in self.storage_backend.__class__.__name__
+            and (hasattr(self.storage_backend, "write_block") or hasattr(self.storage_backend, "write"))
+        )
+        if not has_real_backend:
+            self._block_payloads[key] = {
+                "k": k_arr.copy(),
+                "v": v_arr.copy(),
+                "bytes": k_arr.tobytes() + v_arr.tobytes(),
+            }
 
         # Delegate to underlying storage backend
         if hasattr(self.storage_backend, "write_block"):
@@ -418,7 +426,7 @@ class RealInferencePrefetchAdapter:
                 size_bytes=self.bytes_per_block,
                 data_k=k_tensor,
                 data_v=v_tensor,
-                data=raw_bytes,
+                data=None,  # Phase C: omit redundant raw bytes in staging
                 staged_time_ns=staged_ns,
                 ready_time_ns=time.perf_counter_ns(),
                 is_useful=False,

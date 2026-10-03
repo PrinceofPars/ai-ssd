@@ -14,6 +14,8 @@ Classification: ANALYTICAL
 from typing import Tuple, Dict, Any, Optional, List, Union
 import numpy as np
 import time
+import os
+import tempfile
 
 from common.schemas.kv_block import KVBlock
 from person2_ssd.kv_allocator.tensor_mapping import (
@@ -95,11 +97,18 @@ class RealInferenceStorageBackend:
             blocks_per_plane=self.blocks_per_plane,
             num_layers=self.num_layers,
             num_heads=self.num_heads,
+            max_tokens_per_head=65536,
             sector_size_bytes=4096,
         )
 
-        # In-memory storage table: indexed by (layer_id, block_id) -> payload dict
+        # Storage metadata table: indexed by (layer_id, block_id) -> metadata dict
         self._storage: Dict[Tuple[int, int], Dict[str, Any]] = {}
+
+        # Direct-access backing file for true host-RAM offload
+        self._backing_dir = tempfile.gettempdir()
+        self._backing_path = os.path.join(self._backing_dir, f"aissd_p2_{os.getpid()}_{id(self)}.bin")
+        self._backing_fd = os.open(self._backing_path, os.O_RDWR | os.O_CREAT | os.O_TRUNC)
+        self._file_offset: int = 0
 
         # Telemetry counters
         self._channel_counters: Dict[int, int] = {c: 0 for c in range(self.channels)}
@@ -121,6 +130,24 @@ class RealInferenceStorageBackend:
         self.combined_block_read_requests: int = 0
 
         self._access_log: List[Dict[str, Any]] = []
+
+    def close(self) -> None:
+        """Closes file descriptor and removes backing file."""
+        if getattr(self, "_backing_fd", None) is not None:
+            try:
+                os.close(self._backing_fd)
+            except OSError:
+                pass
+            self._backing_fd = None
+        if getattr(self, "_backing_path", None) and os.path.exists(self._backing_path):
+            try:
+                os.unlink(self._backing_path)
+            except OSError:
+                pass
+            self._backing_path = None
+
+    def __del__(self) -> None:
+        self.close()
 
     # -------------------------------------------------------------------------
     # Core Write Interface (Supports both P1 write_block and P2 store_kv)
@@ -149,17 +176,23 @@ class RealInferenceStorageBackend:
         # Convert / validate arrays
         if isinstance(k_block, np.ndarray):
             k_arr = np.ascontiguousarray(k_block)
+            k_shape = k_arr.shape
+            k_dtype = k_arr.dtype
             k_bytes = k_arr.tobytes()
         else:
             k_bytes = bytes(k_block)
-            k_arr = np.frombuffer(k_bytes, dtype=np.float32)
+            k_shape = (self.tokens_per_block, self.num_heads, self.head_dim)
+            k_dtype = np.dtype(np.float32)
 
         if isinstance(v_block, np.ndarray):
             v_arr = np.ascontiguousarray(v_block)
+            v_shape = v_arr.shape
+            v_dtype = v_arr.dtype
             v_bytes = v_arr.tobytes()
         else:
             v_bytes = bytes(v_block)
-            v_arr = np.frombuffer(v_bytes, dtype=np.float32)
+            v_shape = (self.tokens_per_block, self.num_heads, self.head_dim)
+            v_dtype = np.dtype(np.float32)
 
         k_size = len(k_bytes)
         v_size = len(v_bytes)
@@ -199,14 +232,29 @@ class RealInferenceStorageBackend:
             mode=self.mapping_mode,
         )
 
-        # Store in table
+        # Write to backing file (Phase D: true host-RAM offload)
+        k_offset = self._file_offset
+        os.pwrite(self._backing_fd, k_bytes, k_offset)
+        v_offset = k_offset + k_size
+        os.pwrite(self._backing_fd, v_bytes, v_offset)
+        self._file_offset += total_block_bytes
+
+        if hasattr(os, "posix_fadvise") and hasattr(os, "POSIX_FADV_DONTNEED"):
+            try:
+                os.posix_fadvise(self._backing_fd, k_offset, total_block_bytes, os.POSIX_FADV_DONTNEED)
+            except OSError:
+                pass
+
+        # Store ONLY metadata in memory table (no payload tensors or raw bytes)
         self._storage[(layer_idx, block_id)] = {
-            "k": k_arr.copy(),
-            "v": v_arr.copy(),
-            "k_shape": k_arr.shape if isinstance(k_arr, np.ndarray) else None,
-            "v_shape": v_arr.shape if isinstance(v_arr, np.ndarray) else None,
-            "k_bytes": k_bytes,
-            "v_bytes": v_bytes,
+            "k_offset": k_offset,
+            "k_size": k_size,
+            "k_shape": k_shape,
+            "k_dtype": k_dtype,
+            "v_offset": v_offset,
+            "v_size": v_size,
+            "v_shape": v_shape,
+            "v_dtype": v_dtype,
             "head_id": head_id,
             "token_start": token_start,
             "channel": primary_ch,
@@ -228,6 +276,8 @@ class RealInferenceStorageBackend:
             "channel": primary_ch,
             "bytes": total_block_bytes,
         })
+        if len(self._access_log) > 200:
+            del self._access_log[: len(self._access_log) - 200]
 
     def store_kv(
         self,
@@ -281,8 +331,14 @@ class RealInferenceStorageBackend:
             k_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
             k_bytes_count = k_ret.nbytes
         else:
-            k_ret = entry["k"].copy()
-            k_bytes_count = len(entry["k_bytes"])
+            raw_bytes = os.pread(self._backing_fd, entry["k_size"], entry["k_offset"])
+            if hasattr(os, "posix_fadvise") and hasattr(os, "POSIX_FADV_DONTNEED"):
+                try:
+                    os.posix_fadvise(self._backing_fd, entry["k_offset"], entry["k_size"], os.POSIX_FADV_DONTNEED)
+                except OSError:
+                    pass
+            k_ret = np.frombuffer(raw_bytes, dtype=entry["k_dtype"]).reshape(entry["k_shape"]).copy()
+            k_bytes_count = entry["k_size"]
 
         # Update telemetry
         self._per_channel_reads[ch] += 1
@@ -299,6 +355,8 @@ class RealInferenceStorageBackend:
             "channel": ch,
             "bytes": k_bytes_count,
         })
+        if len(self._access_log) > 200:
+            del self._access_log[: len(self._access_log) - 200]
 
         return k_ret
 
@@ -332,8 +390,14 @@ class RealInferenceStorageBackend:
             v_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
             v_bytes_count = v_ret.nbytes
         else:
-            v_ret = entry["v"].copy()
-            v_bytes_count = len(entry["v_bytes"])
+            raw_bytes = os.pread(self._backing_fd, entry["v_size"], entry["v_offset"])
+            if hasattr(os, "posix_fadvise") and hasattr(os, "POSIX_FADV_DONTNEED"):
+                try:
+                    os.posix_fadvise(self._backing_fd, entry["v_offset"], entry["v_size"], os.POSIX_FADV_DONTNEED)
+                except OSError:
+                    pass
+            v_ret = np.frombuffer(raw_bytes, dtype=entry["v_dtype"]).reshape(entry["v_shape"]).copy()
+            v_bytes_count = entry["v_size"]
 
         # Update telemetry
         self._per_channel_reads[ch] += 1
@@ -351,6 +415,8 @@ class RealInferenceStorageBackend:
             "channel": ch,
             "bytes": v_bytes_count,
         })
+        if len(self._access_log) > 200:
+            del self._access_log[: len(self._access_log) - 200]
 
         return v_ret
 
@@ -385,9 +451,16 @@ class RealInferenceStorageBackend:
             v_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
             total_bytes = k_ret.nbytes + v_ret.nbytes
         else:
-            k_ret = entry["k"].copy()
-            v_ret = entry["v"].copy()
-            total_bytes = len(entry["k_bytes"]) + len(entry["v_bytes"])
+            k_raw = os.pread(self._backing_fd, entry["k_size"], entry["k_offset"])
+            v_raw = os.pread(self._backing_fd, entry["v_size"], entry["v_offset"])
+            if hasattr(os, "posix_fadvise") and hasattr(os, "POSIX_FADV_DONTNEED"):
+                try:
+                    os.posix_fadvise(self._backing_fd, entry["k_offset"], entry["k_size"] + entry["v_size"], os.POSIX_FADV_DONTNEED)
+                except OSError:
+                    pass
+            k_ret = np.frombuffer(k_raw, dtype=entry["k_dtype"]).reshape(entry["k_shape"]).copy()
+            v_ret = np.frombuffer(v_raw, dtype=entry["v_dtype"]).reshape(entry["v_shape"]).copy()
+            total_bytes = entry["k_size"] + entry["v_size"]
 
         # Update telemetry
         self._per_channel_reads[ch] += 1
@@ -405,6 +478,8 @@ class RealInferenceStorageBackend:
             "channel": ch,
             "bytes": total_bytes,
         })
+        if len(self._access_log) > 200:
+            del self._access_log[: len(self._access_log) - 200]
 
         return k_ret, v_ret
 

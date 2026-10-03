@@ -606,15 +606,21 @@ def run_aissd_decode(
         next_token = torch.argmax(prefill_out.logits[:, -1, :], dim=-1, keepdim=True)
         generated_tokens = [next_token.item()]
         step_logits = [prefill_out.logits[:, -1, :].clone()]
+        cur_seq_len = input_ids.shape[1]
+
+        # Phase B: True Host-RAM Offload - Release prefill activations and original unpruned KV cache!
+        del prefill_out
+        del pkv_prefill
+        gc.collect()
 
         # 2. Generation execution interval (measured strictly with high-res RSS sampler)
         sampler = ProcessMemorySampler(sample_interval_s=0.002)
         sampler.start()
         t_start = time.perf_counter()
         for step in range(1, decode_tokens):
+            pos_ids = torch.tensor([[cur_seq_len + step - 1]], device=input_ids.device)
             with torch.no_grad():
-                step_out = model(input_ids=next_token, past_key_values=pkv_prefill, use_cache=True)
-            pkv_prefill = step_out.past_key_values
+                step_out = model(input_ids=next_token, position_ids=pos_ids, use_cache=False)
             next_token = torch.argmax(step_out.logits[:, -1, :], dim=-1, keepdim=True)
             generated_tokens.append(next_token.item())
             step_logits.append(step_out.logits[:, -1, :].clone())

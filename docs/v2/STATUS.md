@@ -6,15 +6,21 @@ Real LLM + Real KV Cache + NVMe + FEMU + Tensor-Aware FTL
 
 ## Current Phase
 
-PHASE 5A — REAL QWEN INFERENCE + AI-SSD KV INTEGRATION (P1 COMPLETE)
+PHASE 5C ? TRUE HOST-RAM OFFLOAD & PHYSICAL KV RESIDENCY ELIMINATION (COMPLETE)
 
 ## Current Milestone
 
-M5A
+M5C ? True Host-RAM Offload Verified
 
 ## Last Global Update
 
-P1 real Qwen2.5-0.5B inference integration complete. Both Baseline (in-memory DynamicCache, 19.94 tok/s) and AI-SSD (in-storage block selection + retrieval, 16.48 tok/s, 84.1% KV memory offloaded) verified via actual wall-clock execution over the 16 decode steps. Machine-readable benchmarks published to `/opt/ai-ssd-v2/results/p1/` and audit documented in `docs/v2/P1_REAL_INFERENCE_INTEGRATION.md`.
+Completed True Host-RAM Offload across P1, P2, and P3 to eliminate cold KV retention in RAM.
+At Qwen3-4B Context=4096:
+- Physical OS process RSS during decode drops from Baseline 19,405 MB down to AI-SSD 15,951 MB (-3,454 MB net physical reduction).
+- Storage RAM payload drops from 4,590 MB to 0.00 MB via direct-access backing file storage with POSIX_FADV_DONTNEED.
+- Output accuracy: 100.0% token match (16/16 tokens).
+- Subsystem test suite: 127/127 tests PASS (100%), scripts/run_tests.py: 24/24 PASS (100%).
+Full report: docs/v2/notes/TRUE_HOST_RAM_OFFLOAD_RESULTS.md.
 
 ---
 

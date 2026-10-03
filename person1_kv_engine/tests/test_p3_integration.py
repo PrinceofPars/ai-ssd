@@ -78,7 +78,7 @@ class TestPerson3PrefetchAdapterIntegration:
         pipeline.predict_and_prefetch(current_layer_id=0, current_block_ids=[0, 1, 2, 3])
 
         # Verify staged in DRAM
-        assert pipeline.staging_memory_bytes == 4 * 8192
+        assert pipeline.staging_memory_bytes == 4 * pipeline.bytes_per_block
         assert len(pipeline._staging_buffer) == 4
 
         # Read the prefetched blocks - all should be hits
