@@ -164,6 +164,17 @@ class RealInferenceStorageBackend:
         self.storage_batches: int = 0
         self.batched_requests: int = 0
 
+        # Phase 7: Computational Storage Tracking
+        self.storage_computational_topk_calls: int = 0
+        self.storage_internal_k_blocks: int = 0
+        self.storage_internal_k_bytes: int = 0
+        self.kernel = None
+        try:
+            from person1_kv_engine.c_kernel.kernel_binding import get_native_c_kernel
+            self.kernel = get_native_c_kernel()
+        except Exception:
+            pass
+
         self._access_log: List[Dict[str, Any]] = []
 
     def close(self) -> None:
@@ -805,6 +816,102 @@ class RealInferenceStorageBackend:
         return (layer_idx, block_id) in self._storage
 
     # -------------------------------------------------------------------------
+    # Phase 7: In-Storage Computational Top-K Filtering
+    # -------------------------------------------------------------------------
+
+    def compute_topk_filter(
+        self,
+        layer_idx: int,
+        cand_bids: List[Tuple[int, int]],
+        query: np.ndarray,
+        top_k: int,
+        scale: float,
+        q_heads: int,
+        kv_heads: int,
+        head_dim: int,
+    ) -> List[Tuple[float, int, int]]:
+        """
+        Executes In-Storage Top-K candidate filtering.
+        In nvme_qemu mode: Dispatches Top-K computation directly to the NVMe controller / guest daemon.
+        In file/analytical mode: Scans stored blocks internally without exposing candidate K pages to caller.
+        """
+        if not cand_bids:
+            return []
+
+        cands_info = []
+        for bid, actual_tokens in cand_bids:
+            entry = self._storage.get((layer_idx, bid))
+            if entry is not None:
+                cands_info.append((entry["k_offset"], entry["k_size"], bid, actual_tokens))
+                ch = entry.get("channel", 0)
+                self._per_channel_reads[ch] += 1
+                self._per_channel_read_bytes[ch] += entry["k_size"]
+            else:
+                cands_info.append((0, 4096, bid, actual_tokens))
+
+        if self.storage_mode == "nvme_qemu":
+            results = self._nvme_client.compute_topk(
+                query=query,
+                candidates=cands_info,
+                top_k=top_k,
+                scale=scale,
+                q_heads=q_heads,
+                kv_heads=kv_heads,
+                head_dim=head_dim,
+            )
+        else:
+            # File-backed / analytical in-storage simulation
+            k_blocks_list = []
+            act_tokens_list = []
+            for offset, length, bid, act_tok in cands_info:
+                raw_bytes = os.pread(self._backing_fd, length, offset)
+                entry = self._storage.get((layer_idx, bid))
+                shape = entry["k_shape"] if entry else (self.tokens_per_block, self.num_heads, self.head_dim)
+                dtype = entry["k_dtype"] if entry else np.float32
+                k_blk = np.frombuffer(raw_bytes, dtype=dtype).reshape(shape)
+                k_blocks_list.append(k_blk)
+                act_tokens_list.append(act_tok)
+
+            if hasattr(self, "kernel") and self.kernel and self.kernel.is_available() and hasattr(self.kernel._lib, "instorage_topk_filter_gqa_avx2"):
+                top_indices, top_scores = self.kernel.compute_topk_gqa(
+                    query=query,
+                    k_blocks=k_blocks_list,
+                    actual_tokens=act_tokens_list,
+                    top_k=top_k,
+                    q_heads=q_heads,
+                    kv_heads=kv_heads,
+                    head_dim=head_dim,
+                )
+                results = [(float(top_scores[i]), cand_bids[idx][0], cand_bids[idx][1]) for i, idx in enumerate(top_indices)]
+            else:
+                scores = []
+                gqa_ratio = q_heads // kv_heads if kv_heads > 0 else 1
+                for i, k_blk in enumerate(k_blocks_list):
+                    bid, act_tok = cand_bids[i]
+                    dots = np.einsum("hd,thd->th", query, k_blk[:, [h // gqa_ratio for h in range(q_heads)], :]) * scale
+                    max_score = float(np.max(dots[:act_tok]))
+                    scores.append((max_score, bid, act_tok))
+                scores.sort(key=lambda x: x[0], reverse=True)
+                results = scores[:top_k]
+
+        self.storage_batches += 1
+        self.requests += 1
+        self.storage_computational_topk_calls += 1
+        self.storage_internal_k_blocks += len(cand_bids)
+        total_k_bytes = sum(item[1] for item in cands_info)
+        self.storage_internal_k_bytes += total_k_bytes
+        self.bytes_read += total_k_bytes
+
+        self._access_log.append({
+            "op": "COMPUTATIONAL_TOPK",
+            "layer_id": layer_idx,
+            "cands_count": len(cand_bids),
+            "top_k": top_k,
+            "bytes_scanned": total_k_bytes,
+        })
+        return results
+
+    # -------------------------------------------------------------------------
     # Telemetry & Performance Counters
     # -------------------------------------------------------------------------
 
@@ -886,6 +993,11 @@ class RealInferenceStorageBackend:
                 "sleep_latency_injected": False,
             },
             "stored_blocks_count": len(self._storage),
+            "computational_storage": {
+                "topk_calls": self.storage_computational_topk_calls,
+                "internal_k_blocks_scanned": self.storage_internal_k_blocks,
+                "internal_k_bytes_scanned": self.storage_internal_k_bytes,
+            },
         }
 
         if getattr(self, "_nvme_client", None) is not None:
@@ -910,6 +1022,9 @@ class RealInferenceStorageBackend:
         self.combined_block_read_requests = 0
         self.storage_batches = 0
         self.batched_requests = 0
+        self.storage_computational_topk_calls = 0
+        self.storage_internal_k_blocks = 0
+        self.storage_internal_k_bytes = 0
         self._access_log.clear()
         if getattr(self, "_nvme_client", None) is not None:
             self._nvme_client.reset_stats()

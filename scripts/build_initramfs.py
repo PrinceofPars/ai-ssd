@@ -56,7 +56,7 @@ copy_with_libs("/usr/bin/fio")
 # Compile static nvme_guest_daemon
 daemon_src = os.path.join(os.path.dirname(__file__), "nvme_guest_daemon.c")
 daemon_dest = os.path.join(INITRAMFS_DIR, "usr/bin/nvme_guest_daemon")
-subprocess.run(["gcc", "-O3", "-static", daemon_src, "-o", daemon_dest], check=True)
+subprocess.run(["gcc", "-O3", "-mavx2", "-mfma", "-static", daemon_src, "-o", daemon_dest], check=True)
 
 init_script = """#!/bin/sh
 mount -t proc none /proc

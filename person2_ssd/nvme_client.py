@@ -26,6 +26,7 @@ OP_PING = 3
 OP_FLUSH = 4
 OP_SHUTDOWN = 5
 OP_BATCH_READ = 6
+OP_COMPUTE_TOPK = 7
 
 HEADER_SIZE = 20  # struct.calcsize("<IBBHQI")
 
@@ -53,6 +54,10 @@ class QemuNvmeClient:
         self.total_recv_time_s: float = 0.0
         self.batch_count: int = 0
         self.batch_sizes: List[int] = []
+        self.topk_compute_ops: int = 0
+        self.topk_internal_scanned_bytes: int = 0
+        self.topk_query_transferred_bytes: int = 0
+        self.topk_metadata_transferred_bytes: int = 0
 
     def start_qemu(self, raw_img: str = RAW_IMG, timeout_s: float = 20.0) -> None:
         """Starts QEMU with KVM and the virtual NVMe device, waiting for the guest daemon."""
@@ -249,6 +254,90 @@ class QemuNvmeClient:
         self.batch_sizes.append(num_items)
         return results
 
+    def compute_topk(
+        self,
+        query: Any,
+        candidates: List[Tuple[int, int, int, int]],  # (offset, length, block_id, actual_tokens)
+        top_k: int,
+        scale: float,
+        q_heads: int,
+        kv_heads: int,
+        head_dim: int,
+    ) -> List[Tuple[float, int, int]]:
+        """
+        Dispatches in-storage Top-K filtering to /dev/nvme0n1 inside the QEMU guest VM.
+        Transfers ONLY the Query vector Q and candidate block descriptors over the storage bus.
+        The guest daemon reads candidate Key pages directly from NVMe, computes GQA dot-products,
+        and returns ONLY the top_k selected block IDs and scores.
+        Candidate Key pages are NEVER transferred to the host!
+
+        Returns:
+            List of (score, block_id, actual_tokens) tuples sorted descending by score.
+        """
+        if not candidates:
+            return []
+        if self.sock is None:
+            self.connect()
+
+        import numpy as np
+
+        t_pack = time.perf_counter()
+        num_cands = len(candidates)
+        # 1. Header: magic, op, flags, reserved, offset, length (num_cands)
+        req_hdr = struct.pack("<IBBHQI", MAGIC, OP_COMPUTE_TOPK, 0, 0, 0, num_cands)
+        # 2. Top-K parameters header: num_candidates, top_k, q_heads, kv_heads, head_dim, scale
+        topk_hdr = struct.pack("<IIIIIf", num_cands, top_k, q_heads, kv_heads, head_dim, float(scale))
+        # 3. Query array bytes (float32 contiguous)
+        q_contiguous = np.ascontiguousarray(query, dtype=np.float32)
+        q_bytes = q_contiguous.tobytes()
+        # 4. Candidate items: offset (Q), length (I), block_id (I), actual_tokens (I)
+        cands_payload = bytearray()
+        total_internal_k_bytes = 0
+        for offset, length, bid, act_tok in candidates:
+            cands_payload.extend(struct.pack("<QIII", offset, length, bid, act_tok))
+            total_internal_k_bytes += length
+
+        pack_elapsed = time.perf_counter() - t_pack
+
+        t_send = time.perf_counter()
+        self.sock.sendall(req_hdr + topk_hdr + q_bytes + cands_payload)
+        send_elapsed = time.perf_counter() - t_send
+
+        t_wait = time.perf_counter()
+        resp = self._recv_exact(HEADER_SIZE)
+        wait_elapsed = time.perf_counter() - t_wait
+
+        magic, status, op, _, _, resp_items = struct.unpack("<IBBHQI", resp)
+        if magic != MAGIC or status != 0:
+            raise IOError(f"NVMe in-storage topk failed, status {status}")
+
+        t_recv = time.perf_counter()
+        topk_results: List[Tuple[float, int, int]] = []
+        if resp_items > 0:
+            # Each item: block_id (uint32), score (float32), actual_tokens (uint32) = 12 bytes
+            resp_bytes = self._recv_exact(resp_items * 12)
+            for i in range(resp_items):
+                bid, score, act_tok = struct.unpack_from("<IfI", resp_bytes, i * 12)
+                topk_results.append((float(score), int(bid), int(act_tok)))
+        recv_elapsed = time.perf_counter() - t_recv
+
+        total_elapsed = pack_elapsed + send_elapsed + wait_elapsed + recv_elapsed
+        self.read_ops += num_cands
+        self.total_read_bytes += total_internal_k_bytes
+        self.total_read_time_s += total_elapsed
+        self.total_pack_time_s += pack_elapsed
+        self.total_send_time_s += send_elapsed
+        self.total_wait_time_s += wait_elapsed
+        self.total_recv_time_s += recv_elapsed
+        self.batch_count += 1
+        self.batch_sizes.append(num_cands)
+
+        self.topk_compute_ops += 1
+        self.topk_internal_scanned_bytes += total_internal_k_bytes
+        self.topk_query_transferred_bytes += len(q_bytes) + len(cands_payload)
+        self.topk_metadata_transferred_bytes += resp_items * 12
+        return topk_results
+
     def flush(self) -> None:
         """Flushes volatile write buffers on the NVMe device."""
         if self.sock is None:
@@ -285,9 +374,12 @@ class QemuNvmeClient:
         self.total_pack_time_s = 0.0
         self.total_send_time_s = 0.0
         self.total_wait_time_s = 0.0
-        self.total_recv_time_s = 0.0
         self.batch_count = 0
         self.batch_sizes.clear()
+        self.topk_compute_ops = 0
+        self.topk_internal_scanned_bytes = 0
+        self.topk_query_transferred_bytes = 0
+        self.topk_metadata_transferred_bytes = 0
 
     def get_telemetry(self) -> Dict[str, Any]:
         """Returns hardware-level NVMe driver I/O telemetry."""
@@ -316,6 +408,10 @@ class QemuNvmeClient:
             "min_batch_size": min(self.batch_sizes) if self.batch_sizes else 0,
             "max_batch_size": max(self.batch_sizes) if self.batch_sizes else 0,
             "avg_batch_size": round(sum(self.batch_sizes) / len(self.batch_sizes), 2) if self.batch_sizes else 0.0,
+            "topk_compute_ops": self.topk_compute_ops,
+            "topk_internal_scanned_bytes": self.topk_internal_scanned_bytes,
+            "topk_query_transferred_bytes": self.topk_query_transferred_bytes,
+            "topk_metadata_transferred_bytes": self.topk_metadata_transferred_bytes,
         }
 
     def __del__(self):

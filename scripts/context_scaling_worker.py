@@ -60,6 +60,8 @@ def run_worker():
     parser.add_argument("--disable-prefetch", action="store_false", dest="enable_prefetch")
     parser.add_argument("--enable-batching", action="store_true", default=True, dest="enable_batching")
     parser.add_argument("--disable-batching", action="store_false", dest="enable_batching")
+    parser.add_argument("--enable-computational-storage", action="store_true", default=True, dest="enable_computational_storage")
+    parser.add_argument("--disable-computational-storage", action="store_false", dest="enable_computational_storage")
     parser.add_argument("--top-k-pct", type=float, default=10.0)
     parser.add_argument("--context", type=int, required=True)
     parser.add_argument("--rep", type=int, default=0)
@@ -166,6 +168,7 @@ def run_worker():
                 top_k_pct=args.top_k_pct,
                 storage_backend=backend,
                 enable_prefetch=args.enable_prefetch,
+                enable_computational_storage=args.enable_computational_storage,
                 seed=effective_seed,
             )
             total_time = time.perf_counter() - t0
@@ -203,6 +206,7 @@ def run_worker():
                 "mapping_mode": args.mapping_mode,
                 "enable_prefetch": args.enable_prefetch,
                 "enable_batching": args.enable_batching,
+                "enable_computational_storage": args.enable_computational_storage,
                 "top_k_pct": args.top_k_pct,
                 "backend_classification": getattr(storage, "CLASSIFICATION", "UNKNOWN"),
                 "context_length": args.context,
@@ -228,6 +232,11 @@ def run_worker():
                 "storage_requests": res.get("storage_requests", 0),
                 "storage_batches": res.get("storage_batches", 0),
                 "avg_batch_size": res.get("avg_batch_size", 1.0),
+                "candidate_k_bytes_to_host": res.get("candidate_k_bytes_to_host", 0),
+                "winning_k_bytes_to_host": res.get("winning_k_bytes_to_host", 0),
+                "winning_v_bytes_to_host": res.get("winning_v_bytes_to_host", 0),
+                "topk_metadata_bytes_to_host": res.get("topk_metadata_bytes_to_host", 0),
+                "total_data_movement_bytes": res.get("total_data_movement_bytes", 0),
                 "stored_blocks": len(storage._storage) if hasattr(storage, "_storage") else 0,
                 "p2_resident_payload_mb": p2_resident_bytes / (1024.0 * 1024.0),
                 "p3_resident_payload_mb": p3_resident_bytes / (1024.0 * 1024.0),

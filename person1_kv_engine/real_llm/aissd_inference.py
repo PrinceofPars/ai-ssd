@@ -280,18 +280,28 @@ class AISSDKVManager:
         sink_tokens: int = 4,
         recent_tokens: int = 16,
         top_k_pct: float = 10.0,
+        enable_computational_storage: bool = False,
+        enable_prefetch: bool = True,
     ):
         self.backend = backend
         self.num_layers = num_layers
         self.sink_tokens = sink_tokens
         self.recent_tokens = recent_tokens
         self.top_k_pct = top_k_pct
+        self.enable_computational_storage = enable_computational_storage
+        self.enable_prefetch = enable_prefetch
         self.tokens_per_block = 16
         self.head_dim = 64
         self.is_active = False
         self.layer_data: Dict[int, Dict[str, Any]] = {}
         self.kernel = get_native_c_kernel()
+        self.candidate_k_bytes_to_host: int = 0
+        self.winning_k_bytes_to_host: int = 0
+        self.winning_v_bytes_to_host: int = 0
+        self.topk_metadata_bytes_to_host: int = 0
         self.timings = {
+            "qkv_proj_s": 0.0,
+            "rope_s": 0.0,
             "candidate_k_reads_s": 0.0,
             "topk_scoring_s": 0.0,
             "candidate_selection_s": 0.0,
@@ -299,12 +309,20 @@ class AISSDKVManager:
             "winning_v_reads_s": 0.0,
             "tensor_recon_s": 0.0,
             "active_concat_s": 0.0,
+            "attn_matmul_s": 0.0,
+            "out_proj_s": 0.0,
+            "mlp_and_norm_s": 0.0,
+            "bookkeeping_s": 0.0,
         }
 
     def reset_timings(self) -> None:
         """Resets all sub-operation timings to zero."""
         for k in self.timings:
             self.timings[k] = 0.0
+        self.candidate_k_bytes_to_host = 0
+        self.winning_k_bytes_to_host = 0
+        self.winning_v_bytes_to_host = 0
+        self.topk_metadata_bytes_to_host = 0
 
     def init_from_prefill(self, past_key_values: Any) -> None:
         """Blockizes the prefill KV cache and offloads historical blocks to storage backend."""
@@ -406,66 +424,119 @@ class AISSDKVManager:
             cand_ids = [bid for bid, _ in cand_bids]
             act_tokens_list = [actual_tokens for _, actual_tokens in cand_bids]
 
-            # Optimization C: Batch candidate Key page reads from storage
-            t_k_start = time.perf_counter()
-            if hasattr(self.backend, "read_key_page_batch"):
-                loaded_k_pages = self.backend.read_key_page_batch(l_idx, cand_ids)
-                k_blocks_list = [loaded_k_pages[bid] for bid in cand_ids]
-            else:
-                loaded_k_pages = {}
-                k_blocks_list = []
-                for bid, actual_tokens in cand_bids:
-                    k_blk = self.backend.read_key_page(l_idx, bid)
-                    loaded_k_pages[bid] = k_blk
-                    k_blocks_list.append(k_blk)
-            self.timings["candidate_k_reads_s"] += time.perf_counter() - t_k_start
-
-            t_score_start = time.perf_counter()
-            if self.kernel.is_available() and hasattr(self.kernel._lib, "instorage_topk_filter_gqa_avx2"):
-                top_indices, top_scores = self.kernel.compute_topk_gqa(
+            if self.enable_computational_storage and hasattr(self.backend, "compute_topk_filter"):
+                # Phase 7 Computational Storage:
+                # Key scoring and Top-K filtering run directly inside the storage environment.
+                # Candidate Key pages NEVER cross the storage bus to host!
+                t_score_start = time.perf_counter()
+                top_bids = self.backend.compute_topk_filter(
+                    layer_idx=l_idx,
+                    cand_bids=cand_bids,
                     query=q_np,
-                    k_blocks=k_blocks_list,
-                    actual_tokens=act_tokens_list,
                     top_k=k_val,
+                    scale=scale,
                     q_heads=q_np.shape[0],
-                    kv_heads=k_blocks_list[0].shape[1],
+                    kv_heads=self.num_kv_heads,
                     head_dim=self.head_dim,
                 )
                 self.timings["topk_scoring_s"] += time.perf_counter() - t_score_start
 
-                t_sel_start = time.perf_counter()
-                top_bids = [(float(top_scores[i]), cand_bids[idx][0], cand_bids[idx][1]) for i, idx in enumerate(top_indices)]
-                self.timings["candidate_selection_s"] += time.perf_counter() - t_sel_start
+                # Record data movement:
+                # Candidate Keys transferred to host = 0 bytes!
+                self.topk_metadata_bytes_to_host += len(top_bids) * 12
+
+                # Inter-layer speculative prefetch for Layer L+1:
+                t_pref_start = time.perf_counter()
+                if self.enable_prefetch and hasattr(self.backend, "predict_and_prefetch") and cand_bids:
+                    winning_bids = [bid for _, bid, _ in top_bids]
+                    self.backend.predict_and_prefetch(current_layer_id=l_idx, current_block_ids=winning_bids)
+                self.timings["prefetch_s"] += time.perf_counter() - t_pref_start
+
+                # Host retrieves winning blocks over PCIe (TOPK_FETCH):
+                win_bids = [bid for _, bid, _ in top_bids]
+
+                # Fetch winning V pages
+                t_v_start = time.perf_counter()
+                if hasattr(self.backend, "read_value_page_batch"):
+                    loaded_v_pages = self.backend.read_value_page_batch(l_idx, win_bids)
+                else:
+                    loaded_v_pages = {bid: self.backend.read_value_page(l_idx, bid) for bid in win_bids}
+                self.timings["winning_v_reads_s"] += time.perf_counter() - t_v_start
+                self.winning_v_bytes_to_host += len(win_bids) * 4096
+
+                # Fetch winning K pages (only for winning blocks, NOT candidate blocks!)
+                t_k_start = time.perf_counter()
+                if hasattr(self.backend, "read_key_page_batch"):
+                    loaded_k_pages = self.backend.read_key_page_batch(l_idx, win_bids)
+                else:
+                    loaded_k_pages = {bid: self.backend.read_key_page(l_idx, bid) for bid in win_bids}
+                self.timings["candidate_k_reads_s"] += time.perf_counter() - t_k_start
+                self.winning_k_bytes_to_host += len(win_bids) * 4096
+
             else:
-                scores = []
-                for bid, actual_tokens in cand_bids:
-                    k_blk = loaded_k_pages[bid]
-                    dots = np.einsum("hd,thd->th", q_np, k_blk[:, [h // 7 for h in range(14)], :]) * scale
-                    max_score = float(np.max(dots[:actual_tokens]))
-                    scores.append((max_score, bid, actual_tokens))
-                self.timings["topk_scoring_s"] += time.perf_counter() - t_score_start
+                # Host-side candidate streaming (Phase 5/6 baseline path)
+                # Optimization C: Batch candidate Key page reads from storage
+                t_k_start = time.perf_counter()
+                if hasattr(self.backend, "read_key_page_batch"):
+                    loaded_k_pages = self.backend.read_key_page_batch(l_idx, cand_ids)
+                    k_blocks_list = [loaded_k_pages[bid] for bid in cand_ids]
+                else:
+                    loaded_k_pages = {}
+                    k_blocks_list = []
+                    for bid, actual_tokens in cand_bids:
+                        k_blk = self.backend.read_key_page(l_idx, bid)
+                        loaded_k_pages[bid] = k_blk
+                        k_blocks_list.append(k_blk)
+                self.timings["candidate_k_reads_s"] += time.perf_counter() - t_k_start
+                self.candidate_k_bytes_to_host += len(cand_ids) * 4096
 
-                t_sel_start = time.perf_counter()
-                scores.sort(key=lambda x: x[0], reverse=True)
-                top_bids = scores[:k_val]
-                self.timings["candidate_selection_s"] += time.perf_counter() - t_sel_start
+                t_score_start = time.perf_counter()
+                if self.kernel.is_available() and hasattr(self.kernel._lib, "instorage_topk_filter_gqa_avx2"):
+                    top_indices, top_scores = self.kernel.compute_topk_gqa(
+                        query=q_np,
+                        k_blocks=k_blocks_list,
+                        actual_tokens=act_tokens_list,
+                        top_k=k_val,
+                        q_heads=q_np.shape[0],
+                        kv_heads=k_blocks_list[0].shape[1],
+                        head_dim=self.head_dim,
+                    )
+                    self.timings["topk_scoring_s"] += time.perf_counter() - t_score_start
 
-            # Inter-layer speculative prefetch for Layer L+1:
-            t_pref_start = time.perf_counter()
-            if hasattr(self.backend, "predict_and_prefetch") and cand_bids:
-                winning_bids = [bid for _, bid, _ in top_bids]
-                self.backend.predict_and_prefetch(current_layer_id=l_idx, current_block_ids=winning_bids)
-            self.timings["prefetch_s"] += time.perf_counter() - t_pref_start
+                    t_sel_start = time.perf_counter()
+                    top_bids = [(float(top_scores[i]), cand_bids[idx][0], cand_bids[idx][1]) for i, idx in enumerate(top_indices)]
+                    self.timings["candidate_selection_s"] += time.perf_counter() - t_sel_start
+                else:
+                    scores = []
+                    for bid, actual_tokens in cand_bids:
+                        k_blk = loaded_k_pages[bid]
+                        dots = np.einsum("hd,thd->th", q_np, k_blk[:, [h // 7 for h in range(14)], :]) * scale
+                        max_score = float(np.max(dots[:actual_tokens]))
+                        scores.append((max_score, bid, actual_tokens))
+                    self.timings["topk_scoring_s"] += time.perf_counter() - t_score_start
 
-            # 2. Host retrieves winning blocks over PCIe (TOPK_FETCH)
-            # Optimization C: Batch winning Value page reads from storage
-            t_v_start = time.perf_counter()
-            win_bids = [bid for _, bid, _ in top_bids]
-            if hasattr(self.backend, "read_value_page_batch"):
-                loaded_v_pages = self.backend.read_value_page_batch(l_idx, win_bids)
-            else:
-                loaded_v_pages = {bid: self.backend.read_value_page(l_idx, bid) for bid in win_bids}
-            self.timings["winning_v_reads_s"] += time.perf_counter() - t_v_start
+                    t_sel_start = time.perf_counter()
+                    scores.sort(key=lambda x: x[0], reverse=True)
+                    top_bids = scores[:k_val]
+                    self.timings["candidate_selection_s"] += time.perf_counter() - t_sel_start
+
+                # Inter-layer speculative prefetch for Layer L+1:
+                t_pref_start = time.perf_counter()
+                if self.enable_prefetch and hasattr(self.backend, "predict_and_prefetch") and cand_bids:
+                    winning_bids = [bid for _, bid, _ in top_bids]
+                    self.backend.predict_and_prefetch(current_layer_id=l_idx, current_block_ids=winning_bids)
+                self.timings["prefetch_s"] += time.perf_counter() - t_pref_start
+
+                # 2. Host retrieves winning blocks over PCIe (TOPK_FETCH)
+                # Optimization C: Batch winning Value page reads from storage
+                t_v_start = time.perf_counter()
+                win_bids = [bid for _, bid, _ in top_bids]
+                if hasattr(self.backend, "read_value_page_batch"):
+                    loaded_v_pages = self.backend.read_value_page_batch(l_idx, win_bids)
+                else:
+                    loaded_v_pages = {bid: self.backend.read_value_page(l_idx, bid) for bid in win_bids}
+                self.timings["winning_v_reads_s"] += time.perf_counter() - t_v_start
+                self.winning_v_bytes_to_host += len(win_bids) * 4096
 
             # Optimization B: Reuse Key pages already loaded during scoring, eliminating duplicate reads
             t_rec_start = time.perf_counter()
@@ -606,6 +677,7 @@ def run_aissd_decode(
     seed: int = 42,
     storage_backend: Optional[Any] = None,
     enable_prefetch: bool = True,
+    enable_computational_storage: bool = False,
 ) -> Dict[str, Any]:
     """Runs genuine Qwen inference where KV access during decode executes the AI-SSD path.
     
@@ -620,7 +692,12 @@ def run_aissd_decode(
     else:
         backend = storage_backend
 
-    kv_mgr = AISSDKVManager(backend, top_k_pct=top_k_pct)
+    kv_mgr = AISSDKVManager(
+        backend,
+        top_k_pct=top_k_pct,
+        enable_computational_storage=enable_computational_storage,
+        enable_prefetch=enable_prefetch,
+    )
 
     model_timings = {
         "qkv_proj_s": 0.0,
@@ -817,6 +894,17 @@ def run_aissd_decode(
         "generated_text": generated_text,
         "final_logits": step_logits[-1].cpu().numpy(),
         "timing_breakdown": timing_breakdown,
+        "enable_computational_storage": enable_computational_storage,
+        "candidate_k_bytes_to_host": kv_mgr.candidate_k_bytes_to_host,
+        "winning_k_bytes_to_host": kv_mgr.winning_k_bytes_to_host,
+        "winning_v_bytes_to_host": kv_mgr.winning_v_bytes_to_host,
+        "topk_metadata_bytes_to_host": kv_mgr.topk_metadata_bytes_to_host,
+        "total_data_movement_bytes": (
+            kv_mgr.candidate_k_bytes_to_host
+            + kv_mgr.winning_k_bytes_to_host
+            + kv_mgr.winning_v_bytes_to_host
+            + kv_mgr.topk_metadata_bytes_to_host
+        ),
     }
 
     if hasattr(backend, "get_telemetry"):

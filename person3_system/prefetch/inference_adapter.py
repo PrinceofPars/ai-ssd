@@ -420,13 +420,15 @@ class RealInferencePrefetchAdapter:
                 )
                 raw_bytes = res.data or b"\x00" * self.bytes_per_block
                 half = len(raw_bytes) // 2
-                k_tensor = np.frombuffer(raw_bytes[:half], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
-                v_tensor = np.frombuffer(raw_bytes[half:], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
+                shape = self._block_meta.get(key, {}).get("shape", (self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
+                k_tensor = np.frombuffer(raw_bytes[:half], dtype=self.np_dtype).reshape(shape)
+                v_tensor = np.frombuffer(raw_bytes[half:], dtype=self.np_dtype).reshape(shape)
             else:
                 raw_bytes = b"\x00" * self.bytes_per_block
                 half = len(raw_bytes) // 2
-                k_tensor = np.frombuffer(raw_bytes[:half], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
-                v_tensor = np.frombuffer(raw_bytes[half:], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
+                shape = self._block_meta.get(key, {}).get("shape", (self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
+                k_tensor = np.frombuffer(raw_bytes[:half], dtype=self.np_dtype).reshape(shape)
+                v_tensor = np.frombuffer(raw_bytes[half:], dtype=self.np_dtype).reshape(shape)
 
             entry = StagedInferenceBlock(
                 block_id=bid,
@@ -654,9 +656,10 @@ class RealInferencePrefetchAdapter:
             self.record_hit(layer_id=layer_idx, block_id=block_id, sub_page="BOTH", size_bytes=self.bytes_per_block, latency_us=elapsed_us)
             if entry.data_k is not None and entry.data_v is not None:
                 return entry.data_k, entry.data_v
+            shape = self._block_meta.get(key, {}).get("shape", (self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
             raw = entry.data or b"\x00" * self.bytes_per_block
-            k_ret = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
-            v_ret = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
+            k_ret = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype).reshape(shape)
+            v_ret = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype).reshape(shape)
             return k_ret, v_ret
 
         # Demand Miss
@@ -680,9 +683,10 @@ class RealInferencePrefetchAdapter:
                 operation="DECODE_READ",
                 sub_page="BOTH",
             )
+            shape = self._block_meta.get(key, {}).get("shape", (self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
             raw = res.data or b"\x00" * self.bytes_per_block
-            k_tensor = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
-            v_tensor = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
+            k_tensor = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype).reshape(shape)
+            v_tensor = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype).reshape(shape)
         else:
             k_tensor = np.zeros((self.tokens_per_block, self.kv_heads_per_block, self.head_dim), dtype=self.np_dtype)
             v_tensor = np.zeros((self.tokens_per_block, self.kv_heads_per_block, self.head_dim), dtype=self.np_dtype)
@@ -922,8 +926,8 @@ class RealInferencePrefetchAdapter:
                     results[bid] = (entry.data_k, entry.data_v)
                 else:
                     raw = entry.data or b"\x00" * self.bytes_per_block
-                    k_ret = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
-                    v_ret = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
+                    k_ret = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype)
+                    v_ret = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype)
                     results[bid] = (k_ret, v_ret)
             else:
                 miss_bids.append(bid)
@@ -950,6 +954,33 @@ class RealInferencePrefetchAdapter:
         self.storage_batches += 1
         self.batched_requests += batch_count
         return results
+
+    def compute_topk_filter(
+        self,
+        layer_idx: int,
+        cand_bids: List[Tuple[int, int]],
+        query: np.ndarray,
+        top_k: int,
+        scale: float,
+        q_heads: int,
+        kv_heads: int,
+        head_dim: int,
+    ) -> List[Tuple[float, int, int]]:
+        """
+        Delegates in-storage computational Top-K filtering to the underlying storage backend.
+        """
+        if hasattr(self.storage_backend, "compute_topk_filter"):
+            return self.storage_backend.compute_topk_filter(
+                layer_idx=layer_idx,
+                cand_bids=cand_bids,
+                query=query,
+                top_k=top_k,
+                scale=scale,
+                q_heads=q_heads,
+                kv_heads=kv_heads,
+                head_dim=head_dim,
+            )
+        raise NotImplementedError("Storage backend does not support compute_topk_filter")
 
     def contains_block(self, layer_idx: int, block_id: int) -> bool:
         """Checks if block exists in staging buffer or storage backend."""

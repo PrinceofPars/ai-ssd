@@ -6,23 +6,23 @@ Real LLM + Real KV Cache + NVMe + FEMU + Tensor-Aware FTL
 
 ## Current Phase
 
-PHASE 6 — CONTROLLED ABLATIONS, QEMU/NVME BOTTLENECK ISOLATION & END-TO-END EVIDENCE AUDIT (COMPLETE)
+PHASE 7 — COMPUTATIONAL STORAGE: IN-STORAGE TOP-K CANDIDATE FILTERING (COMPLETE)
 
 ## Current Milestone
 
-M6 — Bottleneck Isolation Proving Host-Side Candidate Key Streaming as the Sole NVMe Bottleneck
+M7 — Level B In-Storage Hardware AVX2/FMA Top-K Filtering on Virtual NVMe Device (/dev/nvme0n1)
 
 ## Last Global Update
 
-Completed Phase 6: Controlled Ablation Study on live Qwen3-4B-Instruct-2507 workload isolating all storage, FTL, and compute components:
-- **Core Research Question Answered:** Isolated why live QEMU/NVMe takes ~51s vs ~10s file-backed: Host-side Top-k candidate scoring requires streaming 8.49 GB of candidate Key blocks across the virtual storage bus on every decode step. In file-backed mode, the OS cache handles this in 2.03s; over NVMe (bandwidth ~253 MB/s), it takes 31.71s (62.4% of decode wall time).
-- **NVMe Protocol Overhead:** Detailed telemetry isolates binary command packing (0.038s), TCP send (0.047s), and guest roundtrip wait (0.924s) to just 1.01s total (<2.6% of storage time), proving protocol overhead is negligible; 97.4% is raw payload streaming.
-- **FTL Multi-Channel Load Balancing:** Tensor-Aware FTL distributes 145,336 read requests across 8 channels with 1.08% load imbalance and 1.01 contention ratio vs Conventional FTL's 700.0% imbalance and 8.00 contention ratio (100% on Channel 0).
-- **Prefetching Tradeoff:** Without parallel DMA hardware, speculative prefetching on a single-link serialized bus incurs a net 2.27s penalty (48.71s no-prefetch vs 50.98s with prefetch) due to bus contention with demand reads.
-- **Top-K Sparse vs Dense:** Top-10% sparse attention reduces host active KV RAM by 89.4% (from 1,153 MB to 122.6 MB) and attention matmul time by 6.1x (from 4.16s to 0.69s).
-- **Mathematical Foundation for Phase 7:** Proved that pushing dot-product scoring into the SSD controller (computational storage) will eliminate the 31.71s Key transfer bottleneck, projecting QEMU/NVMe decode time from 50.8s down to ~15.1s (1.06 tok/s).
-- **Full Verification:** 151/151 unit tests passed, 24/24 contract tests passed, 16/16 exact token match maintained across all 6 ablation runs.
-- **Reports:** docs/v2/notes/PHASE6_CONTROLLED_ABLATIONS.md, benchmarks/live_inference/results/phase6_ablation_results.json.
+Completed Phase 7: Computational Storage in QEMU/NVMe environment:
+- Moved Key dot-product scoring and Top-K candidate selection inside the storage controller (`scripts/nvme_guest_daemon.c` with hardware AVX2/FMA intrinsics reading directly from `/dev/nvme0n1`).
+- Completely eliminated candidate Key streaming to host: candidate Key bytes transferred to host = 0 bytes (100% reduction of non-winning candidate Keys across PCIe).
+- Total storage bus data movement reduced by 81.47% (from 621.5 MB down to 115.2 MB).
+- QEMU/NVMe decode time collapsed from 52.70s to 21.48s (2.45x measured speedup).
+- Candidate Key read time collapsed from 32.63s to 4.08s (8.0x speedup).
+- 100% exact token ID match (16/16 tokens) maintained across all evaluated modes.
+- True host-RAM offload preserved: P2 and P3 resident payload remains 0.0 MB.
+- Reports: docs/v2/notes/PHASE7_COMPUTATIONAL_STORAGE_RESULTS.md, benchmarks/live_inference/results/phase7_computational_storage_results.json.
 
 ---
 
@@ -30,7 +30,7 @@ Completed Phase 6: Controlled Ablation Study on live Qwen3-4B-Instruct-2507 work
 
 | Agent | Worktree | Branch | State |
 |---|---|---|---|
-| P1 | /home/ubuntu/ai-ssd | v2-real-llm-kvssd | PHASE 6 COMPLETE (Controlled Ablations & Bottlenecks Isolated) |
+| P1 | /home/ubuntu/ai-ssd | v2-real-llm-kvssd | PHASE 5 COMPLETE (QEMU/NVMe Live Storage + FTL Verified) |
 | P2 | ../ai-ssd-p2 | v2/p2-femu-ftl | PHASE 3 COMPLETE |
 | P3 | ../ai-ssd-p3 | v2/p3-system-integration | PHASE 3 COMPLETE |
 
