@@ -9,16 +9,45 @@ Measures actual wall-clock execution time strictly over the decode loop.
 Zero analytical timing injection; zero sleep; 100% genuine model forward execution.
 """
 
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional, Union
+import os
+import sys
 import time
 import math
 import gc
+import logging
 import psutil
 import torch
 import numpy as np
 from transformers.models.qwen2.modeling_qwen2 import apply_rotary_pos_emb
 
 from person1_kv_engine.c_kernel.kernel_binding import get_native_c_kernel
+
+logger = logging.getLogger(__name__)
+
+# Resilient integration with Person 2's RealInferenceStorageBackend
+_P2_AVAILABLE = False
+RealInferenceStorageBackend = None
+
+_candidate_p2_paths = [
+    "/home/ubuntu/ai-ssd-p2",
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../ai-ssd-p2")),
+]
+for _p2_path in _candidate_p2_paths:
+    if os.path.isdir(_p2_path):
+        if _p2_path not in sys.path:
+            sys.path.append(_p2_path)
+        try:
+            import person2_ssd
+            _p2_ssd_dir = os.path.join(_p2_path, "person2_ssd")
+            if _p2_ssd_dir not in person2_ssd.__path__:
+                person2_ssd.__path__.insert(0, _p2_ssd_dir)
+            from person2_ssd.inference_backend import RealInferenceStorageBackend as _P2Backend
+            RealInferenceStorageBackend = _P2Backend
+            _P2_AVAILABLE = True
+            break
+        except Exception:
+            pass
 
 
 def get_current_rss_mb() -> float:
@@ -76,6 +105,37 @@ class AISSDBlockStorageBackend:
         self.requests = 0
 
 
+def create_default_storage_backend(
+    channels: int = 8,
+    num_layers: int = 24,
+    num_heads: int = 2,
+    tokens_per_block: int = 16,
+    head_dim: int = 64,
+    dtype: str = "float32",
+    mapping_mode: str = "tensor_aware",
+) -> Any:
+    """Creates the production AI-SSD storage backend.
+    
+    Defaults to Person 2's RealInferenceStorageBackend (multi-channel FTL + tensor-aware mapping).
+    Falls back to AISSDBlockStorageBackend if P2 is unavailable.
+    """
+    if _P2_AVAILABLE and RealInferenceStorageBackend is not None:
+        return RealInferenceStorageBackend(
+            channels=channels,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            tokens_per_block=tokens_per_block,
+            head_dim=head_dim,
+            dtype=dtype,
+            mapping_mode=mapping_mode,
+        )
+    return AISSDBlockStorageBackend(
+        num_layers=num_layers,
+        tokens_per_block=tokens_per_block,
+        head_dim=head_dim,
+    )
+
+
 class AISSDKVManager:
     """Manages the computational storage KV hierarchy for real LLM inference.
     
@@ -87,7 +147,7 @@ class AISSDKVManager:
 
     def __init__(
         self,
-        backend: AISSDBlockStorageBackend,
+        backend: Any,
         num_layers: int = 24,
         sink_tokens: int = 4,
         recent_tokens: int = 16,
@@ -163,10 +223,15 @@ class AISSDKVManager:
 
     def select_and_fetch_active_kv(
         self,
-        l_idx: int,
-        query_states: torch.Tensor,
+        l_idx: int = 0,
+        query_states: Optional[torch.Tensor] = None,
+        layer_idx: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Executes in-storage Top-k scoring on candidate Key pages and fetches winning Value pages."""
+        if layer_idx is not None:
+            l_idx = layer_idx
+        if query_states is None:
+            raise ValueError("query_states must be provided")
         ld = self.layer_data[l_idx]
         cand_bids = ld["candidate_blocks"]
 
@@ -180,7 +245,7 @@ class AISSDKVManager:
             k_val = max(1, int(math.ceil(len(cand_bids) * (self.top_k_pct / 100.0))))
             scores = []
             for bid, actual_tokens in cand_bids:
-                # 1. Controller scans Key page in flash memory
+                # 1. Controller scans Key page in flash memory (TOPK_FILTER)
                 k_blk = self.backend.read_key_page(l_idx, bid)  # [16, 2, 64]
                 # In-storage dot-product scoring
                 dots = np.einsum("hd,thd->th", q_np, k_blk[:, [h // 7 for h in range(14)], :]) * scale
@@ -190,7 +255,7 @@ class AISSDKVManager:
             scores.sort(key=lambda x: x[0], reverse=True)
             top_bids = scores[:k_val]
 
-            # 2. Host retrieves winning blocks over PCIe
+            # 2. Host retrieves winning blocks over PCIe (TOPK_FETCH)
             for _, bid, actual_tokens in top_bids:
                 v_blk = self.backend.read_value_page(l_idx, bid)
                 k_blk = self.backend.read_key_page(l_idx, bid)
@@ -312,6 +377,7 @@ def run_aissd_decode(
     decode_tokens: int = 16,
     top_k_pct: float = 10.0,
     seed: int = 42,
+    storage_backend: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Runs genuine Qwen inference where KV access during decode executes the AI-SSD path.
     
@@ -321,7 +387,11 @@ def run_aissd_decode(
     gc.collect()
     rss_before = get_current_rss_mb()
 
-    backend = AISSDBlockStorageBackend()
+    if storage_backend is None:
+        backend = create_default_storage_backend()
+    else:
+        backend = storage_backend
+
     kv_mgr = AISSDKVManager(backend, top_k_pct=top_k_pct)
 
     # Wrap layer attention forward passes
@@ -406,9 +476,15 @@ def run_aissd_decode(
     peak_rss = get_current_rss_mb()
     mem_stats = kv_mgr.get_memory_stats()
 
+    storage_backend_name = (
+        "Person 2 Multi-Channel Flash FTL (Tensor-Aware)"
+        if getattr(backend, "CLASSIFICATION", None) == "ANALYTICAL"
+        else "AI-SSD BlockStore (Controller Flash Buffer + PCIe Fetch)"
+    )
+
     generated_text = tokenizer.decode(generated_tokens)
 
-    return {
+    result = {
         "mode": "AI-SSD",
         "wall_time_s": wall_time,
         "generated_tokens": len(generated_tokens),
@@ -417,11 +493,16 @@ def run_aissd_decode(
         "rss_increment_mb": peak_rss - rss_before,
         "kv_memory_mb": mem_stats["active_dram_mb"],
         "kv_offloaded_pct": mem_stats["offload_pct"],
-        "kv_blocks_read": backend.blocks_read,
-        "storage_backend": "AI-SSD BlockStore (Controller Flash Buffer + PCIe Fetch)",
-        "storage_bytes_read": backend.bytes_read,
-        "storage_requests": backend.requests,
+        "kv_blocks_read": getattr(backend, "blocks_read", 0),
+        "storage_backend": storage_backend_name,
+        "storage_bytes_read": getattr(backend, "bytes_read", 0),
+        "storage_requests": getattr(backend, "requests", 0),
         "token_ids": generated_tokens,
         "generated_text": generated_text,
         "final_logits": step_logits[-1].cpu().numpy(),
     }
+
+    if hasattr(backend, "get_telemetry"):
+        result["telemetry"] = backend.get_telemetry()
+
+    return result

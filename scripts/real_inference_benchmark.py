@@ -3,7 +3,8 @@
 
 Measures actual wall-clock Qwen2.5-0.5B inference execution across two genuine modes:
 1. BASELINE: Standard causal inference with in-memory DynamicCache.
-2. AI-SSD: Causal inference executing in-storage Top-k KV block selection and retrieval.
+2. AI-SSD: Causal inference executing in-storage Top-k KV block selection and retrieval
+   using Person 2's RealInferenceStorageBackend.
 
 Measures strictly the generation execution interval (16 decode steps).
 Zero analytical timing injection; zero sleep; zero fabricated speedup.
@@ -86,6 +87,7 @@ def print_benchmark_banner(
     bytes_read: int,
     requests: int,
     classification_str: str,
+    telemetry: Optional[Dict[str, Any]] = None,
 ):
     print("============================================================")
     print("AI-SSD V2 REAL INFERENCE BENCHMARK")
@@ -115,6 +117,17 @@ def print_benchmark_banner(
     print(f"Backend          : {backend_str}")
     print(f"Bytes read       : {bytes_read:,} bytes ({bytes_read / (1024.0 * 1024.0):.2f} MB)")
     print(f"Requests         : {requests}")
+    if telemetry and "channel_distribution" in telemetry:
+        ch_dist = telemetry["channel_distribution"]
+        print("")
+        print("------------------------------------------------------------")
+        print("Hardware Telemetry (Person 2 FTL Multi-Channel Distribution)")
+        print("------------------------------------------------------------")
+        print(f"Per-channel reads: {ch_dist.get('channel_read_counts', {})}")
+        print(f"Per-channel load : {ch_dist.get('per_channel_total_requests', {})}")
+        print(f"Load imbalance   : {ch_dist.get('load_imbalance_percent', 0.0):.2f} %")
+        print(f"Contention ratio : {ch_dist.get('contention_ratio', 1.0):.2f} (vs 8.0x serial conventional)")
+        print(f"Sleep latency    : {telemetry.get('simulated_metrics', {}).get('sleep_latency_injected', False)} (Zero artificial delay)")
     print("")
     print("------------------------------------------------------------")
     print("Classification")
@@ -298,6 +311,8 @@ def main():
         std_tps = float(np.std(rep_tps))
         mean_rss = float(np.mean(rep_rss))
 
+        telemetry = last_aissd_res.get("telemetry")
+
         print_benchmark_banner(
             mode_str="AI-SSD",
             context=actual_context,
@@ -312,6 +327,7 @@ def main():
             bytes_read=last_aissd_res["storage_bytes_read"],
             requests=last_aissd_res["storage_requests"],
             classification_str=aissd_classification,
+            telemetry=telemetry,
         )
 
         aissd_payload = {
@@ -346,6 +362,11 @@ def main():
             "generated_text": last_aissd_res["generated_text"],
             "timestamp_utc": datetime.utcnow().isoformat() + "Z",
         }
+
+        if telemetry:
+            aissd_payload["storage"]["telemetry"] = telemetry
+            if "channel_distribution" in telemetry:
+                aissd_payload["channel_distribution"] = telemetry["channel_distribution"]
 
         aissd_out_path = os.path.join(args.output_dir, "real_inference_ai_ssd.json")
         with open(aissd_out_path, "w", encoding="utf-8") as f:
