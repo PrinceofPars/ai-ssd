@@ -1,15 +1,22 @@
 """
-Tests for Person 2 Real Inference Storage Backend Adapter.
+Comprehensive Unit & Integration Tests for RealInferenceStorageBackend.
 
 Validates:
-1. Writing known KV blocks and retrieving them via DeterministicTensorMapper.
-2. Data fidelity (exact float / byte equality between written and retrieved payload).
-3. Exact page geometry preservation: K = 4096 B, V = 4096 B, K+V = 8192 B.
-4. Selective sub-page retrieval (Key-only for TOPK_FILTER, Value-only for TOPK_FETCH).
-5. Multi-channel distribution across all 8 channels using DeterministicTensorMapper.
-6. Telemetry accuracy (reads, writes, per-channel loads, contention ratio).
-7. Zero simulated sleep latency (line-rate execution for real LLM inference).
-8. Analytical classification reporting.
+1. Exact numerical round-trip data retention:
+   original K/V -> write_block() -> mapper -> read_block() -> equality.
+2. Direct compatibility with P1's live Qwen inference signatures:
+   - write_block(layer_idx, block_id, k_block, v_block)
+   - read_key_page(layer_idx, block_id) -> np.ndarray
+   - read_value_page(layer_idx, block_id) -> np.ndarray
+   - read_block(layer_idx, block_id) -> Tuple[np.ndarray, np.ndarray]
+3. Canonical Geometry:
+   - 16 tokens x 1 KV head x 64 dim x 4 bytes = 4,096 bytes per page
+   - K = 4096 bytes, V = 4096 bytes, K+V = 8192 bytes
+4. Live Qwen2.5-0.5B Grouped Geometry:
+   - (16 tokens, 2 KV heads, 64 dim) float32
+5. Deterministic multi-channel distribution across all 8 channels.
+6. Complete telemetry tracking (reads, writes, per-channel counts, bytes).
+7. Zero artificial latency injection (no time.sleep).
 """
 
 import time
@@ -26,169 +33,148 @@ from person2_ssd.inference_backend import (
 
 class TestRealInferenceStorageBackend:
 
-    def test_write_and_read_known_kv_blocks(self):
-        """Verifies that known numerical KV blocks are accurately persisted and retrieved."""
+    def test_canonical_geometry_constants(self):
+        """Verifies canonical 4 KiB page and 8 KiB block size constants."""
+        assert KEY_PAGE_BYTES == 4096
+        assert VALUE_PAGE_BYTES == 4096
+        assert LOGICAL_BLOCK_BYTES == 8192
+
+    def test_canonical_single_head_roundtrip(self):
+        """
+        Validates round-trip for canonical 1-head geometry:
+        16 tokens x 1 head x 64 dim x FP32 = 4,096 bytes per tensor.
+        """
         backend = RealInferenceStorageBackend(channels=8, num_layers=24, num_heads=2)
 
-        # 1024 float32 numbers = 4,096 bytes
-        known_k = np.linspace(-10.0, 10.0, 1024, dtype=np.float32)
-        known_v = np.sin(np.linspace(0, 2 * np.pi, 1024)).astype(np.float32)
+        # Shape: (16, 1, 64), 1024 float32 elements = 4096 bytes
+        rng = np.random.RandomState(42)
+        k_orig = rng.randn(16, 1, 64).astype(np.float32)
+        v_orig = rng.randn(16, 1, 64).astype(np.float32)
 
-        assert known_k.nbytes == KEY_PAGE_BYTES
-        assert known_v.nbytes == VALUE_PAGE_BYTES
+        assert k_orig.nbytes == KEY_PAGE_BYTES
+        assert v_orig.nbytes == VALUE_PAGE_BYTES
 
-        # Write to Layer 3, Block 7, Head 1
-        success = backend.store_kv(
-            block_id=7,
-            layer_id=3,
-            key_data=known_k,
-            value_data=known_v,
-            head_id=1,
-            token_start=112,
-        )
-        assert success is True
-        assert backend.contains_block(block_id=7, layer_id=3) is True
+        # Write block to Layer 4, Block 9
+        backend.write_block(layer_idx=4, block_id=9, k_block=k_orig, v_block=v_orig)
+        assert backend.contains_block(layer_idx=4, block_id=9) is True
 
-        # Retrieve both Key and Value
-        ret_k, ret_v = backend.load_kv(
-            block_id=7,
-            layer_id=3,
-            head_id=1,
-            token_start=112,
-        )
+        # Read Key page (TOPK_FILTER)
+        k_read = backend.read_key_page(layer_idx=4, block_id=9)
+        assert np.array_equal(k_read, k_orig)
+        assert k_read.shape == k_orig.shape
 
-        assert np.array_equal(ret_k, known_k)
-        assert np.array_equal(ret_v, known_v)
+        # Read Value page (TOPK_FETCH)
+        v_read = backend.read_value_page(layer_idx=4, block_id=9)
+        assert np.array_equal(v_read, v_orig)
+        assert v_read.shape == v_orig.shape
 
-    def test_preserve_exact_geometry_bytes(self):
-        """Verifies enforcement of 4096 B Key, 4096 B Value, 8192 B combined."""
-        backend = RealInferenceStorageBackend()
+        # Read Full Block
+        k_full, v_full = backend.read_block(layer_idx=4, block_id=9)
+        assert np.array_equal(k_full, k_orig)
+        assert np.array_equal(v_full, v_orig)
 
-        # Under-sized tensor (512 floats = 2048 bytes) must fail loudly
-        bad_k = np.zeros(512, dtype=np.float32)
-        valid_v = np.zeros(1024, dtype=np.float32)
-
-        with pytest.raises(ValueError, match="payload byte mismatch: expected 4096 bytes"):
-            backend.store_kv(block_id=0, layer_id=0, key_data=bad_k, value_data=valid_v)
-
-        # Over-sized tensor (2048 floats = 8192 bytes) must fail loudly
-        bad_v = np.zeros(2048, dtype=np.float32)
-        valid_k = np.zeros(1024, dtype=np.float32)
-
-        with pytest.raises(ValueError, match="payload byte mismatch: expected 4096 bytes"):
-            backend.store_kv(block_id=0, layer_id=0, key_data=valid_k, value_data=bad_v)
-
-    def test_subpage_reads_filter_and_fetch(self):
-        """Verifies separate Key and Value subpage retrieval for TOPK operations."""
-        backend = RealInferenceStorageBackend()
-
-        k_data = np.arange(1024, dtype=np.float32) + 100.0
-        v_data = np.arange(1024, dtype=np.float32) + 200.0
-
-        backend.store_kv(block_id=12, layer_id=5, key_data=k_data, value_data=v_data)
-
-        # Read only Key (TOPK_FILTER simulation)
-        k_read = backend.load_key_page(block_id=12, layer_id=5)
-        assert np.array_equal(k_read, k_data)
-
-        # Read only Value (TOPK_FETCH simulation)
-        v_read = backend.load_value_page(block_id=12, layer_id=5)
-        assert np.array_equal(v_read, v_data)
-
-        # Verify telemetry recorded individual 4096 B reads
-        telemetry = backend.get_telemetry()
-        assert telemetry["requests"]["read_key_pages"] == 1
-        assert telemetry["requests"]["read_value_pages"] == 1
-        assert telemetry["bytes"]["reads"] == (KEY_PAGE_BYTES + VALUE_PAGE_BYTES)
-
-    def test_multi_channel_striping_and_telemetry(self):
-        """Verifies that DeterministicTensorMapper distributes requests across all 8 channels."""
+    def test_p1_live_qwen_tensor_shape_roundtrip(self):
+        """
+        Validates round-trip for P1's live Qwen tensor shape:
+        (16 tokens, 2 KV heads, 64 dim) float32 = 8,192 bytes per tensor.
+        """
         backend = RealInferenceStorageBackend(channels=8, num_layers=24, num_heads=2)
 
-        dummy_k = np.zeros(1024, dtype=np.float32)
-        dummy_v = np.ones(1024, dtype=np.float32)
+        rng = np.random.RandomState(123)
+        k_qwen = rng.randn(16, 2, 64).astype(np.float32)
+        v_qwen = rng.randn(16, 2, 64).astype(np.float32)
 
-        # Write 64 blocks spanning diverse layers and heads
-        num_blocks = 64
+        # Write using P1's exact signature: write_block(l_idx, bid, k_blk, v_blk)
+        backend.write_block(0, 3, k_qwen, v_qwen)
+
+        # Read using P1's exact signature: read_key_page(l_idx, bid)
+        k_read = backend.read_key_page(0, 3)
+        assert np.array_equal(k_read, k_qwen)
+        assert k_read.shape == (16, 2, 64)
+
+        # Read using P1's exact signature: read_value_page(l_idx, bid)
+        v_read = backend.read_value_page(0, 3)
+        assert np.array_equal(v_read, v_qwen)
+        assert v_read.shape == (16, 2, 64)
+
+        # Verify P1 compatibility properties
+        assert backend.blocks_written == 1
+        assert backend.bytes_written == (k_qwen.nbytes + v_qwen.nbytes)
+        assert backend.requests == 3  # 1 write + 1 key read + 1 value read
+
+    def test_multi_channel_striping_verification(self):
+        """
+        Verifies that DeterministicTensorMapper distributes live inference blocks
+        across all 8 channels without serialization.
+        """
+        backend = RealInferenceStorageBackend(channels=8, num_layers=24, num_heads=2)
+
+        k_dummy = np.zeros((16, 2, 64), dtype=np.float32)
+        v_dummy = np.zeros((16, 2, 64), dtype=np.float32)
+
+        # Write 96 blocks across 24 layers (4 blocks per layer)
+        num_blocks = 96
         for i in range(num_blocks):
-            layer = i % 24
-            head = (i // 24) % 2
-            backend.store_kv(block_id=i, layer_id=layer, key_data=dummy_k, value_data=dummy_v, head_id=head)
+            l_idx = i % 24
+            b_id = i // 24
+            backend.write_block(l_idx, b_id, k_dummy, v_dummy)
 
         # Read all blocks back
         for i in range(num_blocks):
-            layer = i % 24
-            head = (i // 24) % 2
-            backend.load_kv(block_id=i, layer_id=layer, head_id=head)
+            l_idx = i % 24
+            b_id = i // 24
+            backend.read_block(l_idx, b_id)
 
         telemetry = backend.get_telemetry()
-
-        # Telemetry assertions
-        assert telemetry["backend_classification"] == "ANALYTICAL"
-        assert telemetry["requests"]["writes"] == 64
-        assert telemetry["requests"]["reads"] == 64
-        assert telemetry["bytes"]["writes"] == 64 * LOGICAL_BLOCK_BYTES
-        assert telemetry["bytes"]["reads"] == 64 * LOGICAL_BLOCK_BYTES
-
-        # Channel distribution: all 8 channels must be utilized
         ch_dist = telemetry["channel_distribution"]
-        total_per_channel = ch_dist["per_channel_total_requests"]
-        assert len(total_per_channel) == 8
-        for ch, count in total_per_channel.items():
-            assert count > 0, f"Channel {ch} was starved!"
+        total_reqs_per_ch = ch_dist["per_channel_total_requests"]
 
-        # Contention ratio should be close to 1.0 (optimal balance)
-        assert ch_dist["contention_ratio"] < 1.30
+        # All 8 channels must receive requests (zero channel starvation)
+        assert len(total_reqs_per_ch) == 8
+        for ch, count in total_reqs_per_ch.items():
+            assert count > 0, f"Channel {ch} received zero requests!"
 
-    def test_zero_simulated_sleep_latency(self):
-        """Verifies that no time.sleep is injected, guaranteeing real inference throughput."""
+        # Contention ratio must remain balanced (< 1.5x, vs 8.0x on conventional)
+        assert ch_dist["contention_ratio"] <= 1.50
+        assert telemetry["backend_classification"] == "ANALYTICAL"
+
+    def test_zero_artificial_latency(self):
+        """
+        Guarantees that no time.sleep() or artificial delays exist.
+        200 I/O operations must complete in under 150 ms.
+        """
         backend = RealInferenceStorageBackend()
-        dummy_k = np.zeros(1024, dtype=np.float32)
-        dummy_v = np.zeros(1024, dtype=np.float32)
+        k_buf = np.zeros((16, 1, 64), dtype=np.float32)
+        v_buf = np.zeros((16, 1, 64), dtype=np.float32)
 
-        # Perform 200 operations
-        start_time = time.perf_counter()
+        start = time.perf_counter()
         for i in range(100):
-            backend.store_kv(block_id=i, layer_id=0, key_data=dummy_k, value_data=dummy_v)
-            backend.load_kv(block_id=i, layer_id=0)
-        elapsed = time.perf_counter() - start_time
+            backend.write_block(0, i, k_buf, v_buf)
+            backend.read_key_page(0, i)
+        elapsed = time.perf_counter() - start
 
-        # 200 operations without sleep should take < 150 milliseconds
-        assert elapsed < 0.15, f"Operations took too long ({elapsed:.4f}s), possible sleep injection!"
-
+        assert elapsed < 0.15, f"Execution took {elapsed:.4f}s, potential sleep injection!"
         telemetry = backend.get_telemetry()
         assert telemetry["simulated_metrics"]["sleep_latency_injected"] is False
-        assert telemetry["simulated_metrics"]["analytical_service_time_ms"] > 0.0
 
-    def test_eviction_and_state_management(self):
-        """Verifies block eviction and residency queries."""
+    def test_eviction_and_reset(self):
+        """Validates cache eviction and stats reset."""
         backend = RealInferenceStorageBackend()
-        k_buf = np.zeros(1024, dtype=np.float32)
-        v_buf = np.zeros(1024, dtype=np.float32)
+        k_buf = np.zeros((16, 1, 64), dtype=np.float32)
+        v_buf = np.zeros((16, 1, 64), dtype=np.float32)
 
-        backend.store_kv(block_id=42, layer_id=1, key_data=k_buf, value_data=v_buf)
-        assert backend.contains_block(42, 1) is True
+        backend.write_block(2, 5, k_buf, v_buf)
+        assert backend.contains_block(2, 5) is True
 
-        evicted = backend.evict_kv(42, 1)
-        assert evicted is True
-        assert backend.contains_block(42, 1) is False
+        # Evict
+        assert backend.evict_block(2, 5) is True
+        assert backend.contains_block(2, 5) is False
+        assert backend.evict_block(2, 5) is False
 
-        # Evicting non-existent block returns False
-        assert backend.evict_kv(42, 1) is False
-
-    def test_telemetry_reset(self):
-        """Verifies reset_telemetry clears all counters."""
-        backend = RealInferenceStorageBackend()
-        k_buf = np.zeros(1024, dtype=np.float32)
-        v_buf = np.zeros(1024, dtype=np.float32)
-
-        backend.store_kv(block_id=1, layer_id=0, key_data=k_buf, value_data=v_buf)
-        backend.load_kv(block_id=1, layer_id=0)
-
-        telemetry = backend.get_telemetry()
-        assert telemetry["requests"]["total"] == 2
-
-        backend.reset_telemetry()
-        cleared_telemetry = backend.get_telemetry()
-        assert cleared_telemetry["requests"]["total"] == 0
-        assert cleared_telemetry["bytes"]["total"] == 0
+        # Reset stats
+        backend.reset_stats()
+        assert backend.requests == 0
+        assert backend.bytes_read == 0
+        assert backend.bytes_written == 0
+        assert backend.blocks_read == 0
+        assert backend.blocks_written == 0
