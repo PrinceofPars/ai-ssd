@@ -144,9 +144,12 @@ class TestPerson2StorageBackendIntegration:
         q = torch.randn(1, 14, 1, 64, dtype=torch.float32)
         act_k, act_v = mgr.select_and_fetch_active_kv(layer_idx=0, query_states=q)
 
-        # Active tokens = 4 (sinks) + 16 (recent) + ceil(31 * 0.1) * 16 = 4 + 16 + 64 = 84 tokens
-        assert act_k.shape == (1, 2, 84, 64)
-        assert act_v.shape == (1, 2, 84, 64)
+        # Active tokens = 4 (sinks) + 16 (recent) + 4 Top-k blocks (either 4x16=64 or 3x16+12=60)
+        assert act_k.shape[0] == 1
+        assert act_k.shape[1] == 2
+        assert act_k.shape[2] in (80, 84)
+        assert act_k.shape[3] == 64
+        assert act_v.shape == act_k.shape
 
         # Verify backend read requests and channel distribution
         telemetry_decode = backend.get_telemetry()
