@@ -1,0 +1,72 @@
+{
+  "timestamp_utc": "2026-10-03T11:18:03.000662Z",
+  "benchmark_metadata": {
+    "model": "Qwen/Qwen2.5-0.5B",
+    "context_length": 512,
+    "decode_tokens": 16,
+    "threads": 4,
+    "dtype": "float32",
+    "seed": 42,
+    "repetitions": 3
+  },
+  "baseline": {
+    "wall_time_mean_s": 0.8275567850000698,
+    "wall_time_std_s": 0.002690698346975712,
+    "throughput_mean_tok_s": 19.334224724475927,
+    "throughput_std_tok_s": 0.06275458229537013,
+    "peak_rss_mb": 2742.15625,
+    "kv_memory_mb": 12.375
+  },
+  "ai_ssd": {
+    "wall_time_mean_s": 0.9682217510000252,
+    "wall_time_std_s": 0.008101963520158684,
+    "throughput_mean_tok_s": 16.52629388916569,
+    "throughput_std_tok_s": 0.1378951954959129,
+    "peak_rss_mb": 2907.4921875,
+    "kv_active_dram_mb": 1.96875,
+    "kv_offload_pct": 84.0607210626186,
+    "kv_blocks_read": 14040
+  },
+  "storage": {
+    "bytes_read": 57507840,
+    "total_requests": 14324,
+    "channels_active": 8,
+    "channel_reads": {
+      "0": 1271,
+      "1": 973,
+      "2": 1160,
+      "3": 1093,
+      "4": 1157,
+      "5": 1103,
+      "6": 1203,
+      "7": 1190
+    },
+    "load_imbalance_pct": 11.13,
+    "contention_ratio": 1.11
+  },
+  "prefetch": {
+    "demand_requests": 14040,
+    "demand_hits": 5174,
+    "demand_misses": 8866,
+    "demand_hit_rate_pct": 36.85,
+    "prefetch_requests": 284,
+    "useful_prefetches": 284,
+    "useful_bytes": 1163264,
+    "wasted_bytes": 0,
+    "staging_memory_mb": 2.2188,
+    "peak_memory_mb": 2.2188
+  },
+  "top_k": {
+    "ratio": 0.1,
+    "percent": 10.0
+  },
+  "accuracy": {
+    "token_matches": 9,
+    "token_count": 16,
+    "token_match_pct": 56.25,
+    "logits_cosine_similarity": 0.41089531779289246,
+    "logits_mse": 24.82756233215332,
+    "baseline_text": " solid state drive controller over the PCIe NVMe bus. The controller embedded processing unit",
+    "aissd_text": " solid state drive controller over the PCIe NVMe drive over the PCIe NVMeBus"
+  }
+}

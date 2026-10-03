@@ -293,17 +293,34 @@ class AISSDKVManager:
 
         if cand_bids:
             k_val = max(1, int(math.ceil(len(cand_bids) * (self.top_k_pct / 100.0))))
-            scores = []
-            for bid, actual_tokens in cand_bids:
-                # 1. Controller scans Key page in flash memory (TOPK_FILTER)
-                k_blk = self.backend.read_key_page(l_idx, bid)  # [16, 2, 64]
-                # In-storage dot-product scoring
-                dots = np.einsum("hd,thd->th", q_np, k_blk[:, [h // 7 for h in range(14)], :]) * scale
-                max_score = float(np.max(dots[:actual_tokens]))
-                scores.append((max_score, bid, actual_tokens))
 
-            scores.sort(key=lambda x: x[0], reverse=True)
-            top_bids = scores[:k_val]
+            if self.kernel.is_available() and hasattr(self.kernel._lib, "instorage_topk_filter_gqa_avx2"):
+                k_blocks_list = []
+                act_tokens_list = []
+                for bid, actual_tokens in cand_bids:
+                    k_blk = self.backend.read_key_page(l_idx, bid)
+                    k_blocks_list.append(k_blk)
+                    act_tokens_list.append(actual_tokens)
+
+                top_indices, top_scores = self.kernel.compute_topk_gqa(
+                    query=q_np,
+                    k_blocks=k_blocks_list,
+                    actual_tokens=act_tokens_list,
+                    top_k=k_val,
+                    q_heads=q_np.shape[0],
+                    kv_heads=k_blocks_list[0].shape[1],
+                    head_dim=self.head_dim,
+                )
+                top_bids = [(float(top_scores[i]), cand_bids[idx][0], cand_bids[idx][1]) for i, idx in enumerate(top_indices)]
+            else:
+                scores = []
+                for bid, actual_tokens in cand_bids:
+                    k_blk = self.backend.read_key_page(l_idx, bid)
+                    dots = np.einsum("hd,thd->th", q_np, k_blk[:, [h // 7 for h in range(14)], :]) * scale
+                    max_score = float(np.max(dots[:actual_tokens]))
+                    scores.append((max_score, bid, actual_tokens))
+                scores.sort(key=lambda x: x[0], reverse=True)
+                top_bids = scores[:k_val]
 
             # Inter-layer speculative prefetch for Layer L+1:
             if hasattr(self.backend, "predict_and_prefetch") and cand_bids:

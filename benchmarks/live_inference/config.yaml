@@ -1,0 +1,14 @@
+# Canonical Live Inference Benchmark Configuration
+benchmark:
+  model_name: "Qwen/Qwen2.5-0.5B"
+  context_length: 512
+  decode_tokens: 16
+  threads: 4
+  dtype: "float32"
+  seed: 42
+  repetitions: 3
+
+aissd:
+  topk_ratio: 0.10
+  enable_prefetch: true
+  channels: 8

@@ -39,6 +39,31 @@ EXPORT_API int instorage_topk_filter(
     float* out_topk_scores
 );
 
+/* High-performance AVX2 SIMD GQA-aware In-Storage Scoring & Filtering */
+EXPORT_API float compute_block_score_gqa_avx2(
+    const float* query,
+    const float* k_block,
+    int actual_tokens,
+    int q_heads,
+    int kv_heads,
+    int head_dim,
+    float scale
+);
+
+EXPORT_API int instorage_topk_filter_gqa_avx2(
+    const float* query,
+    const float* const* k_blocks,
+    const int* actual_tokens,
+    int num_blocks,
+    int q_heads,
+    int kv_heads,
+    int head_dim,
+    int top_k,
+    float scale,
+    int* out_topk_indices,
+    float* out_topk_scores
+);
+
 #ifdef __cplusplus
 }
 #endif

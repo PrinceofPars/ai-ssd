@@ -3,6 +3,7 @@
 import ctypes
 import os
 import platform
+import math
 from pathlib import Path
 from typing import List, Tuple, Any, Optional
 import numpy as np
@@ -65,22 +66,43 @@ class NativeCKernel:
         ]
         self._lib.instorage_topk_filter.restype = ctypes.c_int
 
+        # compute_block_score_gqa_avx2
+        if hasattr(self._lib, "compute_block_score_gqa_avx2"):
+            self._lib.compute_block_score_gqa_avx2.argtypes = [
+                ctypes.POINTER(ctypes.c_float),
+                ctypes.POINTER(ctypes.c_float),
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_float,
+            ]
+            self._lib.compute_block_score_gqa_avx2.restype = ctypes.c_float
+
+        # instorage_topk_filter_gqa_avx2
+        if hasattr(self._lib, "instorage_topk_filter_gqa_avx2"):
+            self._lib.instorage_topk_filter_gqa_avx2.argtypes = [
+                ctypes.POINTER(ctypes.c_float),
+                ctypes.POINTER(ctypes.POINTER(ctypes.c_float)),
+                ctypes.POINTER(ctypes.c_int),
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_float,
+                ctypes.POINTER(ctypes.c_int),
+                ctypes.POINTER(ctypes.c_float),
+            ]
+            self._lib.instorage_topk_filter_gqa_avx2.restype = ctypes.c_int
+
     def compute_topk(
         self,
         query: np.ndarray,
         layer_blocks: List[Tuple[int, dict]],
         top_k: int,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Invokes the native C in-storage filtering kernel.
-        
-        Args:
-            query: Query array [heads, head_dim] (float32)
-            layer_blocks: List of (block_id, entry)
-            top_k: Desired number of top blocks
-            
-        Returns:
-            Tuple of (topk_block_ids, topk_values, topk_scores)
-        """
+        """Invokes the native C in-storage filtering kernel."""
         if not self._loaded:
             raise RuntimeError(f"Native C kernel library is not loaded from {self.lib_path}")
 
@@ -90,14 +112,10 @@ class NativeCKernel:
         tokens_per_block = layer_blocks[0][1]["k"].shape[0]
         scale = float(1.0 / np.sqrt(head_dim))
 
-        # Ensure query is contiguous float32
         query_c = np.ascontiguousarray(query, dtype=np.float32)
-
-        # Pack Key blocks into a single contiguous buffer
         k_list = [entry["k"] for _, entry in layer_blocks]
         k_contiguous = np.ascontiguousarray(np.stack(k_list, axis=0), dtype=np.float32)
 
-        # Allocate output buffers
         out_indices = np.zeros(effective_k, dtype=np.int32)
         out_scores = np.zeros(effective_k, dtype=np.float32)
 
@@ -122,11 +140,68 @@ class NativeCKernel:
         if status != 0:
             raise RuntimeError(f"C kernel execution failed with code {status}")
 
-        # Map internal indices back to block_ids
         topk_block_ids = np.array([layer_blocks[idx][0] for idx in out_indices], dtype=np.int32)
         topk_values = np.stack([layer_blocks[idx][1]["v"] for idx in out_indices], axis=0)
 
         return topk_block_ids, topk_values, out_scores
+
+    def compute_topk_gqa(
+        self,
+        query: np.ndarray,
+        k_blocks: List[np.ndarray],
+        actual_tokens: List[int],
+        top_k: int,
+        q_heads: int = 14,
+        kv_heads: int = 2,
+        head_dim: int = 64,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """High-performance AVX2 GQA-aware in-storage Top-k scoring & filtering.
+        
+        Args:
+            query: [q_heads, head_dim] float32
+            k_blocks: List of [tokens, kv_heads, head_dim] float32
+            actual_tokens: List of valid token counts per block
+            top_k: Desired number of top blocks
+        
+        Returns:
+            Tuple of (topk_indices_in_list, topk_scores)
+        """
+        if not self._loaded or not hasattr(self._lib, "instorage_topk_filter_gqa_avx2"):
+            raise RuntimeError("AVX2 GQA kernel not available in native library")
+
+        num_blocks = len(k_blocks)
+        if num_blocks == 0:
+            return np.array([], dtype=np.int32), np.array([], dtype=np.float32)
+
+        effective_k = min(top_k, num_blocks)
+        scale = float(1.0 / math.sqrt(head_dim))
+
+        query_c = np.ascontiguousarray(query, dtype=np.float32)
+        c_float_p = ctypes.POINTER(ctypes.c_float)
+        k_ptrs_arr = (c_float_p * num_blocks)(*[b.ctypes.data_as(c_float_p) for b in k_blocks])
+        act_tokens_arr = (ctypes.c_int * num_blocks)(*actual_tokens)
+
+        out_indices = np.zeros(effective_k, dtype=np.int32)
+        out_scores = np.zeros(effective_k, dtype=np.float32)
+
+        status = self._lib.instorage_topk_filter_gqa_avx2(
+            query_c.ctypes.data_as(c_float_p),
+            k_ptrs_arr,
+            act_tokens_arr,
+            num_blocks,
+            q_heads,
+            kv_heads,
+            head_dim,
+            effective_k,
+            scale,
+            out_indices.ctypes.data_as(ctypes.POINTER(ctypes.c_int)),
+            out_scores.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+        )
+
+        if status != 0:
+            raise RuntimeError(f"AVX2 GQA kernel failed with code {status}")
+
+        return out_indices, out_scores
 
 
 # Singleton instance

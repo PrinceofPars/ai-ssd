@@ -12,8 +12,8 @@ class TestCKernel(unittest.TestCase):
         self.kernel = get_native_c_kernel()
 
     def test_c_kernel_loaded(self):
-        """Validates that instorage_attention.dll is properly compiled and loaded."""
-        self.assertTrue(self.kernel.is_available(), "Native C kernel DLL should be loaded.")
+        """Validates that native C kernel is properly compiled and loaded."""
+        self.assertTrue(self.kernel.is_available(), "Native C kernel should be loaded.")
 
     def test_single_block_score_vs_numpy(self):
         """Checks single block score computed in C vs NumPy dot product."""
@@ -62,12 +62,49 @@ class TestCKernel(unittest.TestCase):
         self.assertEqual(len(topk_ids), top_k)
         self.assertEqual(topk_vals.shape, (top_k, tokens, heads, head_dim))
         self.assertEqual(len(topk_scores), top_k)
-        # Check scores are sorted descending
         self.assertTrue(np.all(np.diff(topk_scores) <= 1e-5))
 
-        # Ensure selected blocks are strictly from the candidate set
         for bid in topk_ids:
             self.assertTrue(0 <= bid < num_blocks)
+
+    def test_gqa_avx2_vs_numpy_einsum(self):
+        """Validates that compute_topk_gqa produces identical results to np.einsum GQA."""
+        num_blocks = 32
+        tokens = 16
+        q_heads = 14
+        kv_heads = 2
+        head_dim = 64
+        top_k = 4
+        scale = float(1.0 / np.sqrt(head_dim))
+
+        np.random.seed(123)
+        query = np.ascontiguousarray(np.random.randn(q_heads, head_dim).astype(np.float32))
+        k_blocks = [np.ascontiguousarray(np.random.randn(tokens, kv_heads, head_dim).astype(np.float32)) for _ in range(num_blocks)]
+        actual_tokens = [16] * num_blocks
+
+        # Reference NumPy einsum
+        scores_py = []
+        for bid in range(num_blocks):
+            dots = np.einsum("hd,thd->th", query, k_blocks[bid][:, [h // 7 for h in range(14)], :]) * scale
+            max_score = float(np.max(dots[:actual_tokens[bid]]))
+            scores_py.append((max_score, bid))
+        scores_py.sort(key=lambda x: x[0], reverse=True)
+        top_py_bids = [bid for _, bid in scores_py[:top_k]]
+        top_py_scores = [s for s, _ in scores_py[:top_k]]
+
+        # AVX2 C kernel
+        top_avx_indices, top_avx_scores = self.kernel.compute_topk_gqa(
+            query=query,
+            k_blocks=k_blocks,
+            actual_tokens=actual_tokens,
+            top_k=top_k,
+            q_heads=q_heads,
+            kv_heads=kv_heads,
+            head_dim=head_dim,
+        )
+
+        np.testing.assert_array_equal(top_py_bids, top_avx_indices)
+        np.testing.assert_allclose(top_py_scores, top_avx_scores, rtol=1e-4, atol=1e-4)
 
 
 if __name__ == "__main__":
