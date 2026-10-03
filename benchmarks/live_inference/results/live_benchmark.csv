@@ -1,3 +1,4 @@
 timestamp,model,context,decode,threads,dtype,topk_ratio,prefetch,baseline_tok_s,baseline_wall_s,baseline_rss_mb,aissd_tok_s,aissd_wall_s,aissd_rss_mb,throughput_retention_pct,dram_reduction_pct,storage_bytes_read,storage_requests,prefetch_hit_pct,useful_prefetches,wasted_bytes,token_match_pct
 2026-10-03T11:12:26.882015Z,Qwen/Qwen2.5-0.5B,512,16,4,float32,0.1,True,19.83,0.8069,2738.6,15.08,1.0611,2775.3,76.0,84.1,57507840,14324,36.9,284,0,56.2
 2026-10-03T11:18:03.000662Z,Qwen/Qwen2.5-0.5B,512,16,4,float32,0.1,True,19.33,0.8276,2742.2,16.53,0.9682,2907.5,85.5,84.1,57507840,14324,36.9,284,0,56.2
+2026-10-03T11:33:05.649398Z,Qwen/Qwen2.5-0.5B,512,16,4,float32,0.1,True,19.70,0.8122,2800.6,16.66,0.9602,2805.4,84.6,84.1,51609600,12884,34.5,284,0,56.2

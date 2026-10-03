@@ -153,11 +153,11 @@ class TestPerson2StorageBackendIntegration:
 
         # Verify backend read requests and channel distribution
         telemetry_decode = backend.get_telemetry()
-        # 31 candidate filter scans + 4 winning key fetches = 35 key page reads
-        assert telemetry_decode["requests"]["read_key_pages"] == 35
+        # Optimization B: 31 candidate scans, 0 duplicate key page reads (reused from scoring)
+        assert telemetry_decode["requests"]["read_key_pages"] == 31
         # 4 winning value fetches
         assert telemetry_decode["requests"]["read_value_pages"] == 4
-        assert telemetry_decode["requests"]["total"] == 39
+        assert telemetry_decode["requests"]["total"] == 35
         assert telemetry_decode["channel_distribution"]["contention_ratio"] < 2.0
 
     def test_zero_artificial_sleep_latency(self):

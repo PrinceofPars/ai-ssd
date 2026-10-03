@@ -146,11 +146,11 @@ def profile_aissd_decode(
                         kv_mgr.backend.predict_and_prefetch(current_layer_id=layer_idx, current_block_ids=winning_bids)
                     pt.record("prefetch_predict", time.perf_counter() - t_pf)
 
-                    # Fetch winning pages
+                    # Fetch winning pages (Optimization B: reuse loaded Key page)
                     for _, bid, actual_tokens in top_bids:
                         t_fetch = time.perf_counter()
                         v_blk = kv_mgr.backend.read_value_page(layer_idx, bid)
-                        k_blk = kv_mgr.backend.read_key_page(layer_idx, bid)
+                        k_blk = k_blocks_list[top_indices[len(selected_k_blocks)]] if len(selected_k_blocks) < len(top_indices) else k_blocks_list[0]
                         pt.record("fetch_winning_pages", time.perf_counter() - t_fetch)
 
                         t_tc = time.perf_counter()

@@ -293,12 +293,14 @@ class AISSDKVManager:
 
         if cand_bids:
             k_val = max(1, int(math.ceil(len(cand_bids) * (self.top_k_pct / 100.0))))
+            loaded_k_pages = {}
 
             if self.kernel.is_available() and hasattr(self.kernel._lib, "instorage_topk_filter_gqa_avx2"):
                 k_blocks_list = []
                 act_tokens_list = []
                 for bid, actual_tokens in cand_bids:
                     k_blk = self.backend.read_key_page(l_idx, bid)
+                    loaded_k_pages[bid] = k_blk
                     k_blocks_list.append(k_blk)
                     act_tokens_list.append(actual_tokens)
 
@@ -316,6 +318,7 @@ class AISSDKVManager:
                 scores = []
                 for bid, actual_tokens in cand_bids:
                     k_blk = self.backend.read_key_page(l_idx, bid)
+                    loaded_k_pages[bid] = k_blk
                     dots = np.einsum("hd,thd->th", q_np, k_blk[:, [h // 7 for h in range(14)], :]) * scale
                     max_score = float(np.max(dots[:actual_tokens]))
                     scores.append((max_score, bid, actual_tokens))
@@ -328,9 +331,10 @@ class AISSDKVManager:
                 self.backend.predict_and_prefetch(current_layer_id=l_idx, current_block_ids=winning_bids)
 
             # 2. Host retrieves winning blocks over PCIe (TOPK_FETCH)
+            # Optimization B: Reuse Key pages already loaded during scoring, eliminating duplicate reads
             for _, bid, actual_tokens in top_bids:
                 v_blk = self.backend.read_value_page(l_idx, bid)
-                k_blk = self.backend.read_key_page(l_idx, bid)
+                k_blk = loaded_k_pages[bid]
                 k_t = torch.from_numpy(k_blk[:actual_tokens]).permute(1, 0, 2).unsqueeze(0)
                 v_t = torch.from_numpy(v_blk[:actual_tokens]).permute(1, 0, 2).unsqueeze(0)
                 selected_k_blocks.append(k_t)
