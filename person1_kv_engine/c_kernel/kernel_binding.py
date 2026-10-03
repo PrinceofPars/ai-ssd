@@ -2,30 +2,37 @@
 
 import ctypes
 import os
+import platform
 from pathlib import Path
 from typing import List, Tuple, Any, Optional
 import numpy as np
 
 
 class NativeCKernel:
-    """Wrapper loading and binding to instorage_attention.dll."""
+    """Wrapper loading and binding to instorage_attention.so (Linux) or .dll (Windows)."""
 
-    def __init__(self, dll_path: Optional[Path] = None):
-        if dll_path is None:
-            kernel_dir = Path(__file__).parent.resolve()
-            dll_path = kernel_dir / "instorage_attention.dll"
+    def __init__(self, lib_path: Optional[Path] = None):
+        kernel_dir = Path(__file__).parent.resolve()
+        if lib_path is None:
+            if platform.system() == "Windows":
+                lib_path = kernel_dir / "instorage_attention.dll"
+            else:
+                lib_path = kernel_dir / "instorage_attention.so"
+                if not lib_path.exists():
+                    lib_path = kernel_dir / "instorage_attention.dll"
 
-        self.dll_path = dll_path
+        self.dll_path = lib_path  # keep attribute name for backwards compatibility
+        self.lib_path = lib_path
         self._loaded = False
         self._lib = None
 
-        if self.dll_path.exists():
+        if self.lib_path.exists():
             try:
-                self._lib = ctypes.CDLL(str(self.dll_path))
+                self._lib = ctypes.CDLL(str(self.lib_path))
                 self._setup_function_signatures()
                 self._loaded = True
             except Exception as e:
-                print(f"[WARNING] Failed to load DLL {self.dll_path}: {e}")
+                print(f"[WARNING] Failed to load native library {self.lib_path}: {e}")
                 self._loaded = False
 
     def is_available(self) -> bool:
@@ -75,7 +82,7 @@ class NativeCKernel:
             Tuple of (topk_block_ids, topk_values, topk_scores)
         """
         if not self._loaded:
-            raise RuntimeError("Native C kernel DLL is not loaded.")
+            raise RuntimeError(f"Native C kernel library is not loaded from {self.lib_path}")
 
         num_blocks = len(layer_blocks)
         effective_k = min(top_k, num_blocks)
