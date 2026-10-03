@@ -9,6 +9,7 @@ import torch
 from person1_kv_engine.real_llm.aissd_inference import (
     AISSDBlockStorageBackend,
     AISSDKVManager,
+    RealInferenceStorageBackend,
 )
 
 RESULTS_DIR = "/opt/ai-ssd-v2/results/p1"
@@ -223,7 +224,44 @@ def test_old_path_k_equals_reused_k():
 
     old_k = torch.cat([ld["sink_k"]] + old_selected_k + [ld["recent_k"]], dim=2)
     old_v = torch.cat([ld["sink_v"]] + old_selected_v + [ld["recent_v"]], dim=2)
-
     # EXACT BIT-FOR-BIT EQUALITY
     assert torch.equal(reused_k, old_k), "Reused Key tensor must be exactly equal to re-read Key tensor!"
     assert torch.equal(reused_v, old_v), "Value tensor must be exactly equal!"
+
+
+def test_batched_storage_requests_correctness():
+    """Optimization C: Verifies that batched storage requests return exact tensors and track batches."""
+    backend = RealInferenceStorageBackend(num_layers=2, num_heads=2, tokens_per_block=16, head_dim=64)
+    kv_mgr = AISSDKVManager(backend, top_k_pct=25.0)
+
+    class MockLayer:
+        def __init__(self):
+            torch.manual_seed(42)
+            self.keys = torch.randn(1, 2, 80, 64)
+            self.values = torch.randn(1, 2, 80, 64)
+
+    class MockPKV:
+        def __init__(self):
+            self.layers = [MockLayer(), MockLayer()]
+
+    kv_mgr.init_from_prefill(MockPKV())
+
+    # Candidate blocks: 4 blocks (0, 1, 2, 3)
+    cand_bids = kv_mgr.layer_data[0]["candidate_blocks"]
+    assert len(cand_bids) == 4
+
+    query = torch.randn(1, 14, 1, 64)
+    backend.reset_stats()
+
+    act_k, act_v = kv_mgr.select_and_fetch_active_kv(0, query)
+
+    # In 1 decode evaluation of layer 0:
+    # 1 batch of candidate Key reads (4 blocks) + 1 batch of winning Value reads (1 block) = 2 batches!
+    assert backend.storage_batches == 2, f"Expected 2 storage batches, got {backend.storage_batches}"
+    # Total logical requests = 4 Key reads + 1 Value read = 5 requests
+    assert backend.requests == 5, f"Expected 5 logical requests, got {backend.requests}"
+    assert backend.batched_requests == 5
+    assert act_k.shape[1] == 2
+    assert act_k.shape[3] == 64
+    assert act_v.shape == act_k.shape
+

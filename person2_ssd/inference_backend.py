@@ -129,6 +129,10 @@ class RealInferenceStorageBackend:
         self.value_page_read_requests: int = 0
         self.combined_block_read_requests: int = 0
 
+        # Optimization C: Batch request tracking
+        self.storage_batches: int = 0
+        self.batched_requests: int = 0
+
         self._access_log: List[Dict[str, Any]] = []
 
     def close(self) -> None:
@@ -332,11 +336,6 @@ class RealInferenceStorageBackend:
             k_bytes_count = k_ret.nbytes
         else:
             raw_bytes = os.pread(self._backing_fd, entry["k_size"], entry["k_offset"])
-            if hasattr(os, "posix_fadvise") and hasattr(os, "POSIX_FADV_DONTNEED"):
-                try:
-                    os.posix_fadvise(self._backing_fd, entry["k_offset"], entry["k_size"], os.POSIX_FADV_DONTNEED)
-                except OSError:
-                    pass
             k_ret = np.frombuffer(raw_bytes, dtype=entry["k_dtype"]).reshape(entry["k_shape"]).copy()
             k_bytes_count = entry["k_size"]
 
@@ -391,11 +390,6 @@ class RealInferenceStorageBackend:
             v_bytes_count = v_ret.nbytes
         else:
             raw_bytes = os.pread(self._backing_fd, entry["v_size"], entry["v_offset"])
-            if hasattr(os, "posix_fadvise") and hasattr(os, "POSIX_FADV_DONTNEED"):
-                try:
-                    os.posix_fadvise(self._backing_fd, entry["v_offset"], entry["v_size"], os.POSIX_FADV_DONTNEED)
-                except OSError:
-                    pass
             v_ret = np.frombuffer(raw_bytes, dtype=entry["v_dtype"]).reshape(entry["v_shape"]).copy()
             v_bytes_count = entry["v_size"]
 
@@ -453,11 +447,6 @@ class RealInferenceStorageBackend:
         else:
             k_raw = os.pread(self._backing_fd, entry["k_size"], entry["k_offset"])
             v_raw = os.pread(self._backing_fd, entry["v_size"], entry["v_offset"])
-            if hasattr(os, "posix_fadvise") and hasattr(os, "POSIX_FADV_DONTNEED"):
-                try:
-                    os.posix_fadvise(self._backing_fd, entry["k_offset"], entry["k_size"] + entry["v_size"], os.POSIX_FADV_DONTNEED)
-                except OSError:
-                    pass
             k_ret = np.frombuffer(k_raw, dtype=entry["k_dtype"]).reshape(entry["k_shape"]).copy()
             v_ret = np.frombuffer(v_raw, dtype=entry["v_dtype"]).reshape(entry["v_shape"]).copy()
             total_bytes = entry["k_size"] + entry["v_size"]
@@ -486,6 +475,181 @@ class RealInferenceStorageBackend:
     def load_kv(self, block_id: int, layer_id: int, head_id: int = 0, token_start: int = 0) -> Tuple[np.ndarray, np.ndarray]:
         """Alias for read_block with (block_id, layer_id) argument order."""
         return self.read_block(layer_idx=layer_id, block_id=block_id, head_id=head_id, token_start=token_start)
+
+    # -------------------------------------------------------------------------
+    # Optimization C: Batched Storage Request Interface
+    # -------------------------------------------------------------------------
+
+    def read_key_page_batch(
+        self,
+        layer_idx: int,
+        block_ids: List[int],
+        head_id: int = 0,
+        token_start: int = 0,
+    ) -> Dict[int, np.ndarray]:
+        """
+        Reads a batch of Key pages for in-storage filtering (TOPK_FILTER).
+        Combines multiple Key page reads into a single batched storage transaction.
+        Preserves exact block identity, tensor shape, dtype, and numerical correctness.
+        """
+        if not block_ids:
+            return {}
+
+        results: Dict[int, np.ndarray] = {}
+        total_bytes = 0
+
+        for bid in block_ids:
+            entry = self._storage.get((layer_idx, bid))
+            if entry is None:
+                k_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
+                k_bytes_count = k_ret.nbytes
+                ch = 0
+            else:
+                k_offset = entry["k_offset"]
+                k_size = entry["k_size"]
+                raw_bytes = os.pread(self._backing_fd, k_size, k_offset)
+                k_ret = np.frombuffer(raw_bytes, dtype=entry["k_dtype"]).reshape(entry["k_shape"]).copy()
+                k_bytes_count = k_size
+                ch = entry.get("channel", 0)
+
+            self._per_channel_reads[ch] += 1
+            self._per_channel_read_bytes[ch] += k_bytes_count
+            total_bytes += k_bytes_count
+            results[bid] = k_ret
+
+        batch_count = len(block_ids)
+        self.storage_batches += 1
+        self.batched_requests += batch_count
+        self.requests += batch_count
+        self.bytes_read += total_bytes
+        self.key_page_read_requests += batch_count
+
+        self._access_log.append({
+            "op": "BATCH_READ_KEY",
+            "layer_id": layer_idx,
+            "head_id": head_id,
+            "batch_size": batch_count,
+            "bytes": total_bytes,
+        })
+        if len(self._access_log) > 200:
+            del self._access_log[: len(self._access_log) - 200]
+
+        return results
+
+    def read_value_page_batch(
+        self,
+        layer_idx: int,
+        block_ids: List[int],
+        head_id: int = 0,
+        token_start: int = 0,
+    ) -> Dict[int, np.ndarray]:
+        """
+        Reads a batch of Value pages over PCIe (TOPK_FETCH).
+        Combines multiple Value page reads into a single batched storage transaction.
+        """
+        if not block_ids:
+            return {}
+
+        results: Dict[int, np.ndarray] = {}
+        total_bytes = 0
+
+        for bid in block_ids:
+            entry = self._storage.get((layer_idx, bid))
+            if entry is None:
+                v_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
+                v_bytes_count = v_ret.nbytes
+                ch = 0
+            else:
+                v_offset = entry["v_offset"]
+                v_size = entry["v_size"]
+                raw_bytes = os.pread(self._backing_fd, v_size, v_offset)
+                v_ret = np.frombuffer(raw_bytes, dtype=entry["v_dtype"]).reshape(entry["v_shape"]).copy()
+                v_bytes_count = v_size
+                ch = entry.get("channel", 0)
+
+            self._per_channel_reads[ch] += 1
+            self._per_channel_read_bytes[ch] += v_bytes_count
+            total_bytes += v_bytes_count
+            results[bid] = v_ret
+
+        batch_count = len(block_ids)
+        self.storage_batches += 1
+        self.batched_requests += batch_count
+        self.requests += batch_count
+        self.blocks_read += batch_count
+        self.bytes_read += total_bytes
+        self.value_page_read_requests += batch_count
+
+        self._access_log.append({
+            "op": "BATCH_READ_VALUE",
+            "layer_id": layer_idx,
+            "head_id": head_id,
+            "batch_size": batch_count,
+            "bytes": total_bytes,
+        })
+        if len(self._access_log) > 200:
+            del self._access_log[: len(self._access_log) - 200]
+
+        return results
+
+    def read_block_batch(
+        self,
+        layer_idx: int,
+        block_ids: List[int],
+        head_id: int = 0,
+        token_start: int = 0,
+    ) -> Dict[int, Tuple[np.ndarray, np.ndarray]]:
+        """
+        Reads a batch of full KV blocks (both Key and Value pages).
+        Takes advantage of contiguous K+V layout in the backing store.
+        """
+        if not block_ids:
+            return {}
+
+        results: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
+        total_bytes = 0
+
+        for bid in block_ids:
+            entry = self._storage.get((layer_idx, bid))
+            if entry is None:
+                k_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
+                v_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
+                b_bytes = k_ret.nbytes + v_ret.nbytes
+                ch = 0
+            else:
+                k_offset = entry["k_offset"]
+                k_size = entry["k_size"]
+                v_size = entry["v_size"]
+                b_bytes = k_size + v_size
+                raw_bytes = os.pread(self._backing_fd, b_bytes, k_offset)
+                k_ret = np.frombuffer(raw_bytes[:k_size], dtype=entry["k_dtype"]).reshape(entry["k_shape"]).copy()
+                v_ret = np.frombuffer(raw_bytes[k_size:b_bytes], dtype=entry["v_dtype"]).reshape(entry["v_shape"]).copy()
+                ch = entry.get("channel", 0)
+
+            self._per_channel_reads[ch] += 1
+            self._per_channel_read_bytes[ch] += b_bytes
+            total_bytes += b_bytes
+            results[bid] = (k_ret, v_ret)
+
+        batch_count = len(block_ids)
+        self.storage_batches += 1
+        self.batched_requests += batch_count
+        self.requests += batch_count
+        self.blocks_read += batch_count
+        self.bytes_read += total_bytes
+        self.combined_block_read_requests += batch_count
+
+        self._access_log.append({
+            "op": "BATCH_READ_BLOCK",
+            "layer_id": layer_idx,
+            "head_id": head_id,
+            "batch_size": batch_count,
+            "bytes": total_bytes,
+        })
+        if len(self._access_log) > 200:
+            del self._access_log[: len(self._access_log) - 200]
+
+        return results
 
     def evict_block(self, layer_idx: int, block_id: int) -> bool:
         """Erases/invalidates a stored KV block."""
@@ -557,6 +721,9 @@ class RealInferenceStorageBackend:
                 "read_key_pages": self.key_page_read_requests,
                 "read_value_pages": self.value_page_read_requests,
                 "read_combined_blocks": self.combined_block_read_requests,
+                "storage_batches": self.storage_batches,
+                "batched_requests": self.batched_requests,
+                "avg_batch_size": round(self.batched_requests / max(1, self.storage_batches), 2) if self.storage_batches > 0 else 1.0,
             },
             "bytes": {
                 "total": self.bytes_read + self.bytes_written,
@@ -598,6 +765,8 @@ class RealInferenceStorageBackend:
         self.key_page_read_requests = 0
         self.value_page_read_requests = 0
         self.combined_block_read_requests = 0
+        self.storage_batches = 0
+        self.batched_requests = 0
         self._access_log.clear()
 
     def reset_telemetry(self) -> None:

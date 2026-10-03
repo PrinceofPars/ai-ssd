@@ -145,6 +145,8 @@ class AISSDBlockStorageBackend:
         self.blocks_read: int = 0
         self.blocks_written: int = 0
         self.requests: int = 0
+        self.storage_batches: int = 0
+        self.batched_requests: int = 0
 
     def write_block(self, layer_idx: int, block_id: int, k_block: np.ndarray, v_block: np.ndarray) -> None:
         """Writes an 8 KiB logical KV block (4 KiB Key + 4 KiB Value)."""
@@ -168,12 +170,38 @@ class AISSDBlockStorageBackend:
         self.bytes_read += 4096
         return self.blocks[(layer_idx, block_id)]["v"]
 
+    def read_key_page_batch(self, layer_idx: int, block_ids: List[int]) -> Dict[int, np.ndarray]:
+        res = {}
+        for bid in block_ids:
+            res[bid] = self.read_key_page(layer_idx, bid)
+        self.storage_batches += 1
+        self.batched_requests += len(block_ids)
+        return res
+
+    def read_value_page_batch(self, layer_idx: int, block_ids: List[int]) -> Dict[int, np.ndarray]:
+        res = {}
+        for bid in block_ids:
+            res[bid] = self.read_value_page(layer_idx, bid)
+        self.storage_batches += 1
+        self.batched_requests += len(block_ids)
+        return res
+
+    def read_block_batch(self, layer_idx: int, block_ids: List[int]) -> Dict[int, Tuple[np.ndarray, np.ndarray]]:
+        res = {}
+        for bid in block_ids:
+            res[bid] = (self.read_key_page(layer_idx, bid), self.read_value_page(layer_idx, bid))
+        self.storage_batches += 1
+        self.batched_requests += len(block_ids)
+        return res
+
     def reset_stats(self) -> None:
         self.bytes_read = 0
         self.bytes_written = 0
         self.blocks_read = 0
         self.blocks_written = 0
         self.requests = 0
+        self.storage_batches = 0
+        self.batched_requests = 0
 
 
 def create_default_storage_backend(
@@ -357,17 +385,22 @@ class AISSDKVManager:
 
         if cand_bids:
             k_val = max(1, int(math.ceil(len(cand_bids) * (self.top_k_pct / 100.0))))
-            loaded_k_pages = {}
+            cand_ids = [bid for bid, _ in cand_bids]
+            act_tokens_list = [actual_tokens for _, actual_tokens in cand_bids]
 
-            if self.kernel.is_available() and hasattr(self.kernel._lib, "instorage_topk_filter_gqa_avx2"):
+            # Optimization C: Batch candidate Key page reads from storage
+            if hasattr(self.backend, "read_key_page_batch"):
+                loaded_k_pages = self.backend.read_key_page_batch(l_idx, cand_ids)
+                k_blocks_list = [loaded_k_pages[bid] for bid in cand_ids]
+            else:
+                loaded_k_pages = {}
                 k_blocks_list = []
-                act_tokens_list = []
                 for bid, actual_tokens in cand_bids:
                     k_blk = self.backend.read_key_page(l_idx, bid)
                     loaded_k_pages[bid] = k_blk
                     k_blocks_list.append(k_blk)
-                    act_tokens_list.append(actual_tokens)
 
+            if self.kernel.is_available() and hasattr(self.kernel._lib, "instorage_topk_filter_gqa_avx2"):
                 top_indices, top_scores = self.kernel.compute_topk_gqa(
                     query=q_np,
                     k_blocks=k_blocks_list,
@@ -381,8 +414,7 @@ class AISSDKVManager:
             else:
                 scores = []
                 for bid, actual_tokens in cand_bids:
-                    k_blk = self.backend.read_key_page(l_idx, bid)
-                    loaded_k_pages[bid] = k_blk
+                    k_blk = loaded_k_pages[bid]
                     dots = np.einsum("hd,thd->th", q_np, k_blk[:, [h // 7 for h in range(14)], :]) * scale
                     max_score = float(np.max(dots[:actual_tokens]))
                     scores.append((max_score, bid, actual_tokens))
@@ -395,9 +427,16 @@ class AISSDKVManager:
                 self.backend.predict_and_prefetch(current_layer_id=l_idx, current_block_ids=winning_bids)
 
             # 2. Host retrieves winning blocks over PCIe (TOPK_FETCH)
+            # Optimization C: Batch winning Value page reads from storage
+            win_bids = [bid for _, bid, _ in top_bids]
+            if hasattr(self.backend, "read_value_page_batch"):
+                loaded_v_pages = self.backend.read_value_page_batch(l_idx, win_bids)
+            else:
+                loaded_v_pages = {bid: self.backend.read_value_page(l_idx, bid) for bid in win_bids}
+
             # Optimization B: Reuse Key pages already loaded during scoring, eliminating duplicate reads
             for _, bid, actual_tokens in top_bids:
-                v_blk = self.backend.read_value_page(l_idx, bid)
+                v_blk = loaded_v_pages[bid]
                 k_blk = loaded_k_pages[bid]
                 target_dtype = ld["sink_k"].dtype
                 target_device = ld["sink_k"].device
@@ -669,6 +708,8 @@ def run_aissd_decode(
         "storage_backend": storage_backend_name,
         "storage_bytes_read": getattr(backend, "bytes_read", 0),
         "storage_requests": getattr(backend, "requests", 0),
+        "storage_batches": getattr(backend, "storage_batches", 0),
+        "avg_batch_size": (getattr(backend, "requests", 0) / max(1, getattr(backend, "storage_batches", 1))) if getattr(backend, "storage_batches", 0) > 0 else 1.0,
         "token_ids": generated_tokens,
         "generated_text": generated_text,
         "final_logits": step_logits[-1].cpu().numpy(),

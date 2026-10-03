@@ -115,15 +115,21 @@ def profile_aissd_decode(
                     k_val = max(1, int(math.ceil(len(cand_bids) * (kv_mgr.top_k_pct / 100.0))))
                     scores = []
                     
-                    # Read candidate Key pages
-                    k_blocks_list = []
-                    act_tokens_list = []
-                    for bid, actual_tokens in cand_bids:
-                        t_kr = time.perf_counter()
-                        k_blk = kv_mgr.backend.read_key_page(layer_idx, bid)
-                        pt.record("topk_key_reads", time.perf_counter() - t_kr)
-                        k_blocks_list.append(k_blk)
-                        act_tokens_list.append(actual_tokens)
+                    # Read candidate Key pages (Optimization C: Batched)
+                    cand_ids = [bid for bid, _ in cand_bids]
+                    act_tokens_list = [actual_tokens for _, actual_tokens in cand_bids]
+                    t_kr = time.perf_counter()
+                    if hasattr(kv_mgr.backend, "read_key_page_batch"):
+                        loaded_k_pages = kv_mgr.backend.read_key_page_batch(layer_idx, cand_ids)
+                        k_blocks_list = [loaded_k_pages[bid] for bid in cand_ids]
+                    else:
+                        loaded_k_pages = {}
+                        k_blocks_list = []
+                        for bid, actual_tokens in cand_bids:
+                            k_blk = kv_mgr.backend.read_key_page(layer_idx, bid)
+                            loaded_k_pages[bid] = k_blk
+                            k_blocks_list.append(k_blk)
+                    pt.record("topk_key_reads", time.perf_counter() - t_kr)
 
                     # In-storage AVX2 Top-k scoring & selection
                     t_sc = time.perf_counter()
@@ -146,13 +152,18 @@ def profile_aissd_decode(
                         kv_mgr.backend.predict_and_prefetch(current_layer_id=layer_idx, current_block_ids=winning_bids)
                     pt.record("prefetch_predict", time.perf_counter() - t_pf)
 
-                    # Fetch winning pages (Optimization B: reuse loaded Key page)
-                    for _, bid, actual_tokens in top_bids:
-                        t_fetch = time.perf_counter()
-                        v_blk = kv_mgr.backend.read_value_page(layer_idx, bid)
-                        k_blk = k_blocks_list[top_indices[len(selected_k_blocks)]] if len(selected_k_blocks) < len(top_indices) else k_blocks_list[0]
-                        pt.record("fetch_winning_pages", time.perf_counter() - t_fetch)
+                    # Fetch winning pages (Optimization C: Batched Value reads, Optimization B: reuse Key page)
+                    t_fetch = time.perf_counter()
+                    win_bids = [bid for _, bid, _ in top_bids]
+                    if hasattr(kv_mgr.backend, "read_value_page_batch"):
+                        loaded_v_pages = kv_mgr.backend.read_value_page_batch(layer_idx, win_bids)
+                    else:
+                        loaded_v_pages = {bid: kv_mgr.backend.read_value_page(layer_idx, bid) for bid in win_bids}
+                    pt.record("fetch_winning_pages", time.perf_counter() - t_fetch)
 
+                    for _, bid, actual_tokens in top_bids:
+                        v_blk = loaded_v_pages[bid]
+                        k_blk = loaded_k_pages[bid]
                         t_tc = time.perf_counter()
                         k_t = torch.from_numpy(k_blk[:actual_tokens]).permute(1, 0, 2).unsqueeze(0)
                         v_t = torch.from_numpy(v_blk[:actual_tokens]).permute(1, 0, 2).unsqueeze(0)
@@ -229,21 +240,30 @@ def profile_aissd_decode(
 
 
 def main():
-    engine = RealLLMEngine(model_name="Qwen/Qwen2.5-0.5B", device="cpu", dtype="FP32", num_threads=4)
-    prompt = build_prompt_for_length(engine, target_tokens=512)
+    import argparse
+    parser = argparse.ArgumentParser(description="Micro-profiler for AI-SSD decode loop")
+    parser.add_argument("--model", type=str, default="Qwen/Qwen2.5-0.5B")
+    parser.add_argument("--context", type=int, default=512)
+    parser.add_argument("--decode", type=int, default=16)
+    parser.add_argument("--reps", type=int, default=3)
+    parser.add_argument("--seed", type=int, default=42)
+    args = parser.parse_args()
+
+    engine = RealLLMEngine(model_name=args.model, device="cpu", dtype="FP32", num_threads=4)
+    prompt = build_prompt_for_length(engine, target_tokens=args.context)
     inputs = engine.tokenizer(prompt, return_tensors="pt")
     input_ids = inputs["input_ids"]
 
     print("=" * 70)
     print("        AI-SSD V2 DETAILED COMPONENT EXECUTION PROFILING")
     print("=" * 70)
-    print("Model: Qwen2.5-0.5B | Context: 512 | Decode: 16 tokens | Threads: 4")
-    print("Running 3 warmup runs and averaging profiling...")
+    print(f"Model: {args.model} | Context: {args.context} | Decode: {args.decode} tokens | Threads: 4")
+    print(f"Running {args.reps} profiling repetitions and averaging...")
 
     all_timers = []
     all_totals = []
-    for rep in range(3):
-        timers, total = profile_aissd_decode(engine.model, engine.tokenizer, input_ids, decode_tokens=16, seed=42 + rep)
+    for rep in range(args.reps):
+        timers, total = profile_aissd_decode(engine.model, engine.tokenizer, input_ids, decode_tokens=args.decode, seed=args.seed + rep)
         all_timers.append(timers)
         all_totals.append(total)
 

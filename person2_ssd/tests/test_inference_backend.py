@@ -178,3 +178,59 @@ class TestRealInferenceStorageBackend:
         assert backend.bytes_written == 0
         assert backend.blocks_read == 0
         assert backend.blocks_written == 0
+        assert backend.storage_batches == 0
+        assert backend.batched_requests == 0
+
+    def test_batch_storage_operations(self):
+        """Optimization C: Validates batched storage reads and exact tensor reconstruction."""
+        backend = RealInferenceStorageBackend(num_layers=4, num_heads=2, tokens_per_block=16, head_dim=64)
+        layer_idx = 1
+        num_blocks = 8
+
+        # Write test blocks
+        k_blocks = {}
+        v_blocks = {}
+        for b in range(num_blocks):
+            k_data = np.random.randn(16, 2, 64).astype(np.float32)
+            v_data = np.random.randn(16, 2, 64).astype(np.float32)
+            backend.write_block(layer_idx, b, k_data, v_data)
+            k_blocks[b] = k_data
+            v_blocks[b] = v_data
+
+        backend.reset_stats()
+
+        # 1. Batch Key Page Reads
+        bids = [0, 2, 4, 6]
+        k_batch = backend.read_key_page_batch(layer_idx, bids)
+        assert len(k_batch) == 4
+        assert backend.storage_batches == 1
+        assert backend.batched_requests == 4
+        assert backend.requests == 4
+        assert backend.bytes_read == 4 * 16 * 2 * 64 * 4  # 4 * 8192 bytes
+        for b in bids:
+            assert np.array_equal(k_batch[b], k_blocks[b])
+
+        # 2. Batch Value Page Reads
+        v_bids = [1, 3, 5, 7]
+        v_batch = backend.read_value_page_batch(layer_idx, v_bids)
+        assert len(v_batch) == 4
+        assert backend.storage_batches == 2
+        assert backend.batched_requests == 8
+        assert backend.requests == 8
+        for b in v_bids:
+            assert np.array_equal(v_batch[b], v_blocks[b])
+
+        # 3. Batch Combined Block Reads
+        all_bids = list(range(num_blocks))
+        both_batch = backend.read_block_batch(layer_idx, all_bids)
+        assert len(both_batch) == 8
+        assert backend.storage_batches == 3
+        for b in all_bids:
+            kb, vb = both_batch[b]
+            assert np.array_equal(kb, k_blocks[b])
+            assert np.array_equal(vb, v_blocks[b])
+
+        telemetry = backend.get_telemetry()
+        assert telemetry["requests"]["storage_batches"] == 3
+        assert telemetry["requests"]["avg_batch_size"] > 0
+

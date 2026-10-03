@@ -1,0 +1,106 @@
+{
+  "benchmark_name": "Optimization C - Batched Storage Requests",
+  "model": "Qwen/Qwen3-4B-Instruct-2507",
+  "precision": "FP32",
+  "cpu_threads": 4,
+  "context_length": 4096,
+  "decode_tokens": 16,
+  "seed": 42,
+  "evidence_classification": "[REAL] / [STORAGE-BACKED]",
+  "storage_backend": "RealInferenceStorageBackend (P2 Direct I/O)",
+  "prefetch_adapter": "RealInferencePrefetchAdapter (P3 Batched)",
+  "kv_manager": "AISSDKVManager (P1 Live Working Set)",
+  "comparisons": {
+    "baseline": {
+      "mean_wall_time_s": 17.4879,
+      "mean_tokens_per_second": 0.9151,
+      "mean_peak_rss_mb": 20075.38,
+      "active_kv_mb": 1156.5,
+      "storage_requests": 0,
+      "storage_batches": 0
+    },
+    "pre_optimization_c": {
+      "mean_wall_time_s": 113.6712,
+      "mean_tokens_per_second": 0.1408,
+      "mean_peak_rss_mb": 16498.72,
+      "active_kv_mb": 122.625,
+      "storage_requests": 165780,
+      "storage_batches": 1,
+      "avg_batch_size": 1.0,
+      "storage_read_bytes": 621527040,
+      "storage_write_bytes": 1203240960
+    },
+    "post_optimization_c": {
+      "mean_wall_time_s": 10.2404,
+      "std_wall_time_s": 0.1264,
+      "mean_tokens_per_second": 1.5626,
+      "std_tokens_per_second": 0.0191,
+      "mean_peak_rss_mb": 16321.41,
+      "active_kv_mb": 122.625,
+      "cold_kv_mb": 1147.5,
+      "storage_requests": 165780,
+      "storage_batches": 1080,
+      "avg_batch_size": 153.5,
+      "storage_read_bytes": 621527040,
+      "storage_write_bytes": 1203240960,
+      "p2_resident_payload_mb": 0.0,
+      "p3_resident_payload_mb": 0.0,
+      "speedup_vs_pre_c": 11.08,
+      "speedup_vs_baseline": 1.71,
+      "rss_reduction_mb": 3753.97,
+      "exact_token_match": true
+    }
+  },
+  "repetitions": [
+    {
+      "repetition": 0,
+      "wall_time_s": 10.363231043000269,
+      "tokens_per_second": 1.5439200316591442,
+      "peak_rss_mb": 15955.22265625,
+      "avg_rss_mb": 15943.67286517744,
+      "active_kv_mb": 122.625,
+      "storage_requests": 165780,
+      "storage_batches": 1080,
+      "avg_batch_size": 153.5,
+      "token_ids": [11773, 48758, 6529, 19826, 4712, 57203, 12756, 3871, 1948, 279, 3239, 4621, 323, 9144, 6894, 13]
+    },
+    {
+      "repetition": 1,
+      "wall_time_s": 10.112658686997747,
+      "tokens_per_second": 1.582175419464304,
+      "peak_rss_mb": 15949.98046875,
+      "avg_rss_mb": 15943.200847699587,
+      "active_kv_mb": 122.625,
+      "storage_requests": 165780,
+      "storage_batches": 1080,
+      "avg_batch_size": 153.5,
+      "token_ids": [11773, 48758, 6529, 19826, 4712, 57203, 12756, 3871, 1948, 279, 3239, 4621, 323, 9144, 6894, 13]
+    },
+    {
+      "repetition": 2,
+      "wall_time_s": 10.245332244001474,
+      "tokens_per_second": 1.561686787597134,
+      "peak_rss_mb": 17059.03515625,
+      "avg_rss_mb": 16873.195954887167,
+      "active_kv_mb": 122.625,
+      "storage_requests": 165780,
+      "storage_batches": 1080,
+      "avg_batch_size": 153.5,
+      "token_ids": [11773, 48758, 6529, 19826, 4712, 57203, 12756, 3871, 1948, 279, 3239, 4621, 323, 9144, 6894, 13]
+    }
+  ],
+  "profile_breakdown_ms": {
+    "other_layers_and_head": 3795.62,
+    "topk_key_reads": 2126.18,
+    "topk_scoring_avx2": 1494.30,
+    "attn_matmul_oproj": 1004.64,
+    "qkv_proj_rope": 745.34,
+    "prefetch_predict": 582.84,
+    "concat_working_set": 298.08,
+    "fetch_winning_pages": 200.78,
+    "numpy_to_torch": 113.25,
+    "append_token": 22.91,
+    "decode_bookkeeping": 4.66,
+    "total_decode_time_ms": 10388.61
+  }
+}

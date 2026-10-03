@@ -125,6 +125,10 @@ class RealInferencePrefetchAdapter:
 
         self.peak_memory_bytes: int = 0
 
+        # Optimization C: Batch request tracking
+        self.storage_batches: int = 0
+        self.batched_requests: int = 0
+
         # P1 interface compatibility counters
         self._blocks_written: int = 0
         self._bytes_written: int = 0
@@ -372,34 +376,39 @@ class RealInferencePrefetchAdapter:
         Returns:
             List of successfully pre-staged block IDs.
         """
-        dispatched = []
-        for bid in block_ids:
-            key = (layer_id, bid)
-            if key in self._staging_buffer:
-                # Already staged in DRAM
-                continue
+        miss_bids = [bid for bid in block_ids if (layer_id, bid) not in self._staging_buffer]
+        if not miss_bids:
+            return []
 
+        for _ in miss_bids:
             self._ensure_buffer_capacity()
-            staged_ns = time.perf_counter_ns()
 
-            # Retrieve ACTUAL KV data from storage backend
-            k_tensor: Optional[np.ndarray] = None
-            v_tensor: Optional[np.ndarray] = None
-            raw_bytes: Optional[bytes] = None
+        staged_ns = time.perf_counter_ns()
+        fetched_blocks = {}
+        if hasattr(self.storage_backend, "read_block_batch"):
+            fetched_blocks = self.storage_backend.read_block_batch(
+                layer_idx=layer_id,
+                block_ids=miss_bids,
+                head_id=head_id,
+                token_start=token_start,
+            )
 
-            if hasattr(self.storage_backend, "read_block"):
+        dispatched = []
+        for bid in miss_bids:
+            key = (layer_id, bid)
+            if bid in fetched_blocks:
+                k_tensor, v_tensor = fetched_blocks[bid]
+            elif hasattr(self.storage_backend, "read_block"):
                 k_tensor, v_tensor = self.storage_backend.read_block(
                     layer_idx=layer_id,
                     block_id=bid,
                     head_id=head_id,
                     token_start=token_start,
                 )
-                raw_bytes = k_tensor.tobytes() + v_tensor.tobytes()
             elif key in self._block_payloads:
                 cached = self._block_payloads[key]
                 k_tensor = cached["k"].copy()
                 v_tensor = cached["v"].copy()
-                raw_bytes = cached["bytes"]
             elif hasattr(self.storage_backend, "read"):
                 res = self.storage_backend.read(
                     block_id=bid,
@@ -760,6 +769,188 @@ class RealInferencePrefetchAdapter:
             for bid in block_ids
         }
 
+    # -------------------------------------------------------------------------
+    # Optimization C: Batched Storage Request Interface
+    # -------------------------------------------------------------------------
+
+    def read_key_page_batch(
+        self,
+        layer_idx: int,
+        block_ids: List[int],
+        head_id: int = 0,
+        token_start: int = 0,
+    ) -> Dict[int, np.ndarray]:
+        """
+        Reads a batch of 4 KiB Key pages.
+        Checks DRAM staging buffer for hits; dispatches misses as a batched storage request.
+        """
+        if not block_ids:
+            return {}
+
+        results: Dict[int, np.ndarray] = {}
+        miss_bids: List[int] = []
+        t_start_ns = time.perf_counter_ns()
+
+        for bid in block_ids:
+            key = (layer_idx, bid)
+            if key in self._staging_buffer:
+                entry = self._staging_buffer[key]
+                self._staging_buffer.move_to_end(key)
+                if not entry.is_useful:
+                    entry.is_useful = True
+                    self.useful_prefetches += 1
+                    self.useful_bytes += KEY_PAGE_BYTES
+                self.record_hit(layer_id=layer_idx, block_id=bid, sub_page="KEY", size_bytes=KEY_PAGE_BYTES, latency_us=0.0)
+                if entry.data_k is not None:
+                    results[bid] = entry.data_k
+                else:
+                    raw = entry.data or b"\x00" * self.bytes_per_block
+                    results[bid] = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype)
+            else:
+                miss_bids.append(bid)
+
+        if miss_bids:
+            if hasattr(self.storage_backend, "read_key_page_batch"):
+                fetched = self.storage_backend.read_key_page_batch(
+                    layer_idx=layer_idx,
+                    block_ids=miss_bids,
+                    head_id=head_id,
+                    token_start=token_start,
+                )
+                results.update(fetched)
+            else:
+                for bid in miss_bids:
+                    results[bid] = self.read_key_page(layer_idx, bid, head_id, token_start)
+
+            elapsed_us = (time.perf_counter_ns() - t_start_ns) / 1000.0
+            num_misses = len(miss_bids)
+            for bid in miss_bids:
+                self.record_miss(layer_id=layer_idx, block_id=bid, sub_page="KEY", size_bytes=KEY_PAGE_BYTES, latency_us=elapsed_us / num_misses)
+
+        batch_count = len(block_ids)
+        self.storage_batches += 1
+        self.batched_requests += batch_count
+        return results
+
+    def read_value_page_batch(
+        self,
+        layer_idx: int,
+        block_ids: List[int],
+        head_id: int = 0,
+        token_start: int = 0,
+    ) -> Dict[int, np.ndarray]:
+        """
+        Reads a batch of 4 KiB Value pages.
+        Checks DRAM staging buffer for hits; dispatches misses as a batched storage request.
+        """
+        if not block_ids:
+            return {}
+
+        results: Dict[int, np.ndarray] = {}
+        miss_bids: List[int] = []
+        t_start_ns = time.perf_counter_ns()
+
+        for bid in block_ids:
+            key = (layer_idx, bid)
+            if key in self._staging_buffer:
+                entry = self._staging_buffer[key]
+                self._staging_buffer.move_to_end(key)
+                if not entry.is_useful:
+                    entry.is_useful = True
+                    self.useful_prefetches += 1
+                    self.useful_bytes += VALUE_PAGE_BYTES
+                self.record_hit(layer_id=layer_idx, block_id=bid, sub_page="VALUE", size_bytes=VALUE_PAGE_BYTES, latency_us=0.0)
+                if entry.data_v is not None:
+                    results[bid] = entry.data_v
+                else:
+                    raw = entry.data or b"\x00" * self.bytes_per_block
+                    results[bid] = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype)
+            else:
+                miss_bids.append(bid)
+
+        if miss_bids:
+            if hasattr(self.storage_backend, "read_value_page_batch"):
+                fetched = self.storage_backend.read_value_page_batch(
+                    layer_idx=layer_idx,
+                    block_ids=miss_bids,
+                    head_id=head_id,
+                    token_start=token_start,
+                )
+                results.update(fetched)
+            else:
+                for bid in miss_bids:
+                    results[bid] = self.read_value_page(layer_idx, bid, head_id, token_start)
+
+            elapsed_us = (time.perf_counter_ns() - t_start_ns) / 1000.0
+            num_misses = len(miss_bids)
+            for bid in miss_bids:
+                self.record_miss(layer_id=layer_idx, block_id=bid, sub_page="VALUE", size_bytes=VALUE_PAGE_BYTES, latency_us=elapsed_us / num_misses)
+
+        batch_count = len(block_ids)
+        self.storage_batches += 1
+        self.batched_requests += batch_count
+        return results
+
+    def read_block_batch(
+        self,
+        layer_idx: int,
+        block_ids: List[int],
+        head_id: int = 0,
+        token_start: int = 0,
+    ) -> Dict[int, Tuple[np.ndarray, np.ndarray]]:
+        """
+        Reads a batch of full KV blocks.
+        """
+        if not block_ids:
+            return {}
+
+        results: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
+        miss_bids: List[int] = []
+        t_start_ns = time.perf_counter_ns()
+
+        for bid in block_ids:
+            key = (layer_idx, bid)
+            if key in self._staging_buffer:
+                entry = self._staging_buffer[key]
+                self._staging_buffer.move_to_end(key)
+                if not entry.is_useful:
+                    entry.is_useful = True
+                    self.useful_prefetches += 1
+                    self.useful_bytes += self.bytes_per_block
+                self.record_hit(layer_id=layer_idx, block_id=bid, sub_page="BOTH", size_bytes=self.bytes_per_block, latency_us=0.0)
+                if entry.data_k is not None and entry.data_v is not None:
+                    results[bid] = (entry.data_k, entry.data_v)
+                else:
+                    raw = entry.data or b"\x00" * self.bytes_per_block
+                    k_ret = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype)
+                    v_ret = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype)
+                    results[bid] = (k_ret, v_ret)
+            else:
+                miss_bids.append(bid)
+
+        if miss_bids:
+            if hasattr(self.storage_backend, "read_block_batch"):
+                fetched = self.storage_backend.read_block_batch(
+                    layer_idx=layer_idx,
+                    block_ids=miss_bids,
+                    head_id=head_id,
+                    token_start=token_start,
+                )
+                results.update(fetched)
+            else:
+                for bid in miss_bids:
+                    results[bid] = self.read_block(layer_idx, bid, head_id, token_start)
+
+            elapsed_us = (time.perf_counter_ns() - t_start_ns) / 1000.0
+            num_misses = len(miss_bids)
+            for bid in miss_bids:
+                self.record_miss(layer_id=layer_idx, block_id=bid, sub_page="BOTH", size_bytes=self.bytes_per_block, latency_us=elapsed_us / num_misses)
+
+        batch_count = len(block_ids)
+        self.storage_batches += 1
+        self.batched_requests += batch_count
+        return results
+
     def contains_block(self, layer_idx: int, block_id: int) -> bool:
         """Checks if block exists in staging buffer or storage backend."""
         if (layer_idx, block_id) in self._staging_buffer:
@@ -836,6 +1027,11 @@ class RealInferencePrefetchAdapter:
             "wasted_bytes": total_wasted_bytes,
             "total_bytes": self.demand_bytes + total_wasted_bytes,
 
+            # Batch Metrics (Optimization C)
+            "storage_batches": self.storage_batches,
+            "batched_requests": self.batched_requests,
+            "avg_batch_size": round(self.batched_requests / max(1, self.storage_batches), 2) if self.storage_batches > 0 else 1.0,
+
             # Host DRAM Staging Memory
             "staging_memory_bytes": self.staging_memory_bytes,
             "staging_memory_mb": round(self.staging_memory_bytes / (1024.0 * 1024.0), 4),
@@ -876,6 +1072,8 @@ class RealInferencePrefetchAdapter:
         self.demand_hit_latency_us = 0.0
         self.demand_miss_latency_us = 0.0
         self.peak_memory_bytes = 0
+        self.storage_batches = 0
+        self.batched_requests = 0
         self._blocks_written = 0
         self._bytes_written = 0
         if hasattr(self.storage_backend, "reset_stats"):
