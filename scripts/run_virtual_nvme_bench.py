@@ -51,7 +51,7 @@ def run_qemu_benchmarks():
         "-drive", f"file={RAW_IMG},format=raw,if=none,id=nvme0",
         "-device", "nvme,drive=nvme0,serial=v2-ai-ssd-001,num_queues=8,logical_block_size=4096,physical_block_size=4096",
         "-nographic",
-        "-append", "console=ttyS0 panic=-1 quiet loglevel=3",
+        "-append", "console=ttyS0 panic=-1 quiet loglevel=3 bench=1",
     ]
 
     Path(LOG_FILE).parent.mkdir(parents=True, exist_ok=True)

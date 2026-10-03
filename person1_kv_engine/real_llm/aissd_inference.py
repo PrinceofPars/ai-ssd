@@ -214,6 +214,7 @@ def create_default_storage_backend(
     mapping_mode: str = "tensor_aware",
     enable_prefetch: bool = True,
     buffer_capacity_blocks: int = 512,
+    storage_mode: str = "file",
 ) -> Any:
     """Creates the production AI-SSD storage backend pipeline.
     
@@ -233,6 +234,7 @@ def create_default_storage_backend(
             head_dim=head_dim,
             dtype=dtype,
             mapping_mode=mapping_mode,
+            storage_mode=storage_mode,
         )
     else:
         backend = AISSDBlockStorageBackend(

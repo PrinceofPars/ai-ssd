@@ -54,6 +54,8 @@ def get_proc_memory() -> Dict[str, float]:
 def run_worker():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", type=str, required=True, choices=["baseline", "aissd"])
+    parser.add_argument("--storage-mode", type=str, default="file", choices=["file", "nvme_qemu"])
+    parser.add_argument("--mapping-mode", type=str, default="tensor_aware", choices=["tensor_aware", "conventional"])
     parser.add_argument("--context", type=int, required=True)
     parser.add_argument("--rep", type=int, default=0)
     parser.add_argument("--decode", type=int, default=16)
@@ -141,80 +143,98 @@ def run_worker():
             num_heads=num_kv_heads,
             head_dim=head_dim,
             dtype="float32",
+            mapping_mode=args.mapping_mode,
+            storage_mode=args.storage_mode,
         )
 
         storage = getattr(backend, "storage_backend", backend)
         backing_path = getattr(storage, "_backing_path", "")
 
-        t0 = time.perf_counter()
-        res = run_aissd_decode(
-            model=engine.model,
-            tokenizer=engine.tokenizer,
-            input_ids=input_ids,
-            decode_tokens=args.decode,
-            top_k_pct=10.0,
-            storage_backend=backend,
-            enable_prefetch=True,
-            seed=effective_seed,
-        )
-        total_time = time.perf_counter() - t0
-        mem_final = get_proc_memory()
+        try:
+            t0 = time.perf_counter()
+            res = run_aissd_decode(
+                model=engine.model,
+                tokenizer=engine.tokenizer,
+                input_ids=input_ids,
+                decode_tokens=args.decode,
+                top_k_pct=10.0,
+                storage_backend=backend,
+                enable_prefetch=True,
+                seed=effective_seed,
+            )
+            total_time = time.perf_counter() - t0
+            mem_final = get_proc_memory()
 
-        # Audit storage structures
-        p2_resident_bytes = 0
-        p2_meta_bytes = sys.getsizeof(storage._storage) if hasattr(storage, "_storage") else 0
-        if hasattr(storage, "_storage"):
-            for k, v in storage._storage.items():
-                p2_meta_bytes += sys.getsizeof(v)
-                if "k" in v and isinstance(v["k"], np.ndarray):
-                    p2_resident_bytes += v["k"].nbytes
-                if "v" in v and isinstance(v["v"], np.ndarray):
-                    p2_resident_bytes += v["v"].nbytes
+            # Audit storage structures
+            p2_resident_bytes = 0
+            p2_meta_bytes = sys.getsizeof(storage._storage) if hasattr(storage, "_storage") else 0
+            if hasattr(storage, "_storage"):
+                for k, v in storage._storage.items():
+                    p2_meta_bytes += sys.getsizeof(v)
+                    if "k" in v and isinstance(v["k"], np.ndarray):
+                        p2_resident_bytes += v["k"].nbytes
+                    if "v" in v and isinstance(v["v"], np.ndarray):
+                        p2_resident_bytes += v["v"].nbytes
 
-        p3_resident_bytes = 0
-        if hasattr(backend, "_block_payloads"):
-            for k, v in backend._block_payloads.items():
-                if "k" in v and isinstance(v["k"], np.ndarray):
-                    p3_resident_bytes += v["k"].nbytes
-                if "v" in v and isinstance(v["v"], np.ndarray):
-                    p3_resident_bytes += v["v"].nbytes
+            p3_resident_bytes = 0
+            if hasattr(backend, "_block_payloads"):
+                for k, v in backend._block_payloads.items():
+                    if "k" in v and isinstance(v["k"], np.ndarray):
+                        p3_resident_bytes += v["k"].nbytes
+                    if "v" in v and isinstance(v["v"], np.ndarray):
+                        p3_resident_bytes += v["v"].nbytes
 
-        backing_size = os.path.getsize(backing_path) if backing_path and os.path.exists(backing_path) else getattr(storage, "_file_offset", 0)
-        staging_bytes = getattr(backend, "staging_memory_bytes", getattr(backend, "current_memory_bytes", 0))
+            backing_size = getattr(storage, "_file_offset", 0)
+            if not backing_size and backing_path and os.path.exists(backing_path):
+                backing_size = os.path.getsize(backing_path)
+            staging_bytes = getattr(backend, "staging_memory_bytes", getattr(backend, "current_memory_bytes", 0))
 
-        output_data = {
-            "mode": "AI-SSD",
-            "context_length": args.context,
-            "actual_tokens": actual_tokens,
-            "repetition": args.rep,
-            "wall_time_s": res["wall_time_s"],
-            "total_process_time_s": total_time,
-            "decode_tokens": res["generated_tokens"],
-            "tokens_per_second": res["tokens_per_second"],
-            "min_rss_mb": res["min_rss_mb"],
-            "avg_rss_mb": res["avg_rss_mb"],
-            "peak_rss_mb": res["peak_rss_mb"],
-            "std_rss_mb": res.get("std_rss_mb", 0.0),
-            "vm_peak_mb": mem_final["vm_peak_mb"],
-            "rss_anon_mb": mem_final["rss_anon_mb"],
-            "final_rss_mb": mem_final["vm_rss_mb"],
-            "active_kv_mb": res["kv_memory_mb"],
-            "cold_kv_mb": backing_size / (1024.0 * 1024.0),
-            "storage_bytes": backing_size,
-            "storage_backing_path": backing_path,
-            "storage_read_bytes": res.get("storage_bytes_read", 0),
-            "storage_write_bytes": backing_size,
-            "storage_requests": res.get("storage_requests", 0),
-            "storage_batches": res.get("storage_batches", 0),
-            "avg_batch_size": res.get("avg_batch_size", 1.0),
-            "stored_blocks": len(storage._storage) if hasattr(storage, "_storage") else 0,
-            "p2_resident_payload_mb": p2_resident_bytes / (1024.0 * 1024.0),
-            "p3_resident_payload_mb": p3_resident_bytes / (1024.0 * 1024.0),
-            "staging_mb": staging_bytes / (1024.0 * 1024.0),
-            "p2_metadata_bytes": p2_meta_bytes,
-            "token_ids": res["token_ids"],
-            "generated_text": res["generated_text"],
-        }
+            storage_telemetry = storage.get_telemetry() if hasattr(storage, "get_telemetry") else {}
+
+            output_data = {
+                "mode": "AI-SSD",
+                "storage_mode": args.storage_mode,
+                "mapping_mode": args.mapping_mode,
+                "backend_classification": getattr(storage, "CLASSIFICATION", "UNKNOWN"),
+                "context_length": args.context,
+                "actual_tokens": actual_tokens,
+                "repetition": args.rep,
+                "wall_time_s": res["wall_time_s"],
+                "total_process_time_s": total_time,
+                "decode_tokens": res["generated_tokens"],
+                "tokens_per_second": res["tokens_per_second"],
+                "min_rss_mb": res["min_rss_mb"],
+                "avg_rss_mb": res["avg_rss_mb"],
+                "peak_rss_mb": res["peak_rss_mb"],
+                "std_rss_mb": res.get("std_rss_mb", 0.0),
+                "vm_peak_mb": mem_final["vm_peak_mb"],
+                "rss_anon_mb": mem_final["rss_anon_mb"],
+                "final_rss_mb": mem_final["vm_rss_mb"],
+                "active_kv_mb": res["kv_memory_mb"],
+                "cold_kv_mb": backing_size / (1024.0 * 1024.0),
+                "storage_bytes": backing_size,
+                "storage_backing_path": backing_path,
+                "storage_read_bytes": res.get("storage_bytes_read", 0),
+                "storage_write_bytes": backing_size,
+                "storage_requests": res.get("storage_requests", 0),
+                "storage_batches": res.get("storage_batches", 0),
+                "avg_batch_size": res.get("avg_batch_size", 1.0),
+                "stored_blocks": len(storage._storage) if hasattr(storage, "_storage") else 0,
+                "p2_resident_payload_mb": p2_resident_bytes / (1024.0 * 1024.0),
+                "p3_resident_payload_mb": p3_resident_bytes / (1024.0 * 1024.0),
+                "staging_mb": staging_bytes / (1024.0 * 1024.0),
+                "p2_metadata_bytes": p2_meta_bytes,
+                "channel_distribution": storage_telemetry.get("channel_distribution", {}),
+                "nvme_telemetry": storage_telemetry.get("nvme_telemetry", {}),
+                "token_ids": res["token_ids"],
+                "generated_text": res["generated_text"],
+            }
+        finally:
+            if hasattr(backend, "close"):
+                try:
+                    backend.close()
+                except Exception:
+                    pass
 
     with open(args.output_json, "w") as f:
         json.dump(output_data, f, indent=2)

@@ -25,6 +25,17 @@ from person2_ssd.kv_allocator.tensor_mapping import (
     LBAAddress,
 )
 
+try:
+    from person2_ssd.nvme_client import QemuNvmeClient
+    _NVME_CLIENT_AVAILABLE = True
+except ImportError:
+    try:
+        from nvme_client import QemuNvmeClient
+        _NVME_CLIENT_AVAILABLE = True
+    except ImportError:
+        _NVME_CLIENT_AVAILABLE = False
+        QemuNvmeClient = None
+
 # Physical Flash Page & Canonical KV Block Geometry (Codified Contract)
 # 16 tokens x 1 KV head x 64 dimensions x 4 bytes (FP32)
 KEY_PAGE_BYTES: int = 4096        # 4 KiB Key Page
@@ -46,7 +57,7 @@ class RealInferenceStorageBackend:
     - Mapping: DeterministicTensorMapper (channels, dies, planes, blocks, pages)
     - Telemetry: Real-time request and per-channel distribution tracking
     - Latency: Pure analytical calculation — ZERO simulated sleep latency
-    - Classification: ANALYTICAL
+    - Classification: ANALYTICAL (or VIRTUAL-DEVICE when QEMU NVMe mode is active)
     
     Drop-in compatible with P1's AISSDBlockStorageBackend interface.
     """
@@ -66,6 +77,9 @@ class RealInferenceStorageBackend:
         head_dim: int = 64,
         dtype: str = "float32",
         mapping_mode: str = "tensor_aware",
+        # Storage mode: "file" (true offload temp file) or "nvme_qemu" (QEMU NVMe guest controller)
+        storage_mode: str = "file",
+        nvme_raw_path: str = "/opt/ai-ssd-v2/images/v2_nvme.raw",
         # Analytical NAND timing parameters (MLC baseline):
         t_r_us: float = 35.0,
         t_prog_us: float = 350.0,
@@ -82,6 +96,8 @@ class RealInferenceStorageBackend:
         self.head_dim = head_dim
         self.dtype = dtype
         self.mapping_mode = mapping_mode
+        self.storage_mode = storage_mode
+        self.nvme_raw_path = nvme_raw_path
 
         # Timing parameters for analytical metrics
         self.t_r_us = t_r_us
@@ -104,10 +120,23 @@ class RealInferenceStorageBackend:
         # Storage metadata table: indexed by (layer_id, block_id) -> metadata dict
         self._storage: Dict[Tuple[int, int], Dict[str, Any]] = {}
 
-        # Direct-access backing file for true host-RAM offload
-        self._backing_dir = tempfile.gettempdir()
-        self._backing_path = os.path.join(self._backing_dir, f"aissd_p2_{os.getpid()}_{id(self)}.bin")
-        self._backing_fd = os.open(self._backing_path, os.O_RDWR | os.O_CREAT | os.O_TRUNC)
+        # Direct-access backing store initialization
+        if self.storage_mode == "nvme_qemu":
+            self.CLASSIFICATION = "VIRTUAL-DEVICE"
+            if not _NVME_CLIENT_AVAILABLE or QemuNvmeClient is None:
+                raise RuntimeError("QemuNvmeClient is not available for nvme_qemu mode.")
+            self._nvme_client = QemuNvmeClient()
+            self._nvme_client.start_qemu(raw_img=self.nvme_raw_path)
+            self._backing_dir = None
+            self._backing_path = self.nvme_raw_path
+            self._backing_fd = None
+        else:
+            self.CLASSIFICATION = "ANALYTICAL"
+            self._nvme_client = None
+            self._backing_dir = tempfile.gettempdir()
+            self._backing_path = os.path.join(self._backing_dir, f"aissd_p2_{os.getpid()}_{id(self)}.bin")
+            self._backing_fd = os.open(self._backing_path, os.O_RDWR | os.O_CREAT | os.O_TRUNC)
+
         self._file_offset: int = 0
 
         # Telemetry counters
@@ -136,14 +165,21 @@ class RealInferenceStorageBackend:
         self._access_log: List[Dict[str, Any]] = []
 
     def close(self) -> None:
-        """Closes file descriptor and removes backing file."""
+        """Closes file descriptor and removes backing file, shutting down QEMU if active."""
+        if getattr(self, "_nvme_client", None) is not None:
+            try:
+                self._nvme_client.stop_qemu()
+            except Exception:
+                pass
+            self._nvme_client = None
+
         if getattr(self, "_backing_fd", None) is not None:
             try:
                 os.close(self._backing_fd)
             except OSError:
                 pass
             self._backing_fd = None
-        if getattr(self, "_backing_path", None) and os.path.exists(self._backing_path):
+        if self.storage_mode != "nvme_qemu" and getattr(self, "_backing_path", None) and os.path.exists(self._backing_path):
             try:
                 os.unlink(self._backing_path)
             except OSError:
@@ -236,18 +272,20 @@ class RealInferenceStorageBackend:
             mode=self.mapping_mode,
         )
 
-        # Write to backing file (Phase D: true host-RAM offload)
+        # Write to backing store (Phase D: true host-RAM offload)
         k_offset = self._file_offset
-        os.pwrite(self._backing_fd, k_bytes, k_offset)
         v_offset = k_offset + k_size
-        os.pwrite(self._backing_fd, v_bytes, v_offset)
+        if self.storage_mode == "nvme_qemu":
+            self._nvme_client.write(k_offset, k_bytes + v_bytes)
+        else:
+            os.pwrite(self._backing_fd, k_bytes, k_offset)
+            os.pwrite(self._backing_fd, v_bytes, v_offset)
+            if hasattr(os, "posix_fadvise") and hasattr(os, "POSIX_FADV_DONTNEED"):
+                try:
+                    os.posix_fadvise(self._backing_fd, k_offset, total_block_bytes, os.POSIX_FADV_DONTNEED)
+                except OSError:
+                    pass
         self._file_offset += total_block_bytes
-
-        if hasattr(os, "posix_fadvise") and hasattr(os, "POSIX_FADV_DONTNEED"):
-            try:
-                os.posix_fadvise(self._backing_fd, k_offset, total_block_bytes, os.POSIX_FADV_DONTNEED)
-            except OSError:
-                pass
 
         # Store ONLY metadata in memory table (no payload tensors or raw bytes)
         self._storage[(layer_idx, block_id)] = {
@@ -335,7 +373,10 @@ class RealInferenceStorageBackend:
             k_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
             k_bytes_count = k_ret.nbytes
         else:
-            raw_bytes = os.pread(self._backing_fd, entry["k_size"], entry["k_offset"])
+            if self.storage_mode == "nvme_qemu":
+                raw_bytes = self._nvme_client.read(entry["k_offset"], entry["k_size"])
+            else:
+                raw_bytes = os.pread(self._backing_fd, entry["k_size"], entry["k_offset"])
             k_ret = np.frombuffer(raw_bytes, dtype=entry["k_dtype"]).reshape(entry["k_shape"]).copy()
             k_bytes_count = entry["k_size"]
 
@@ -389,7 +430,10 @@ class RealInferenceStorageBackend:
             v_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
             v_bytes_count = v_ret.nbytes
         else:
-            raw_bytes = os.pread(self._backing_fd, entry["v_size"], entry["v_offset"])
+            if self.storage_mode == "nvme_qemu":
+                raw_bytes = self._nvme_client.read(entry["v_offset"], entry["v_size"])
+            else:
+                raw_bytes = os.pread(self._backing_fd, entry["v_size"], entry["v_offset"])
             v_ret = np.frombuffer(raw_bytes, dtype=entry["v_dtype"]).reshape(entry["v_shape"]).copy()
             v_bytes_count = entry["v_size"]
 
@@ -445,8 +489,14 @@ class RealInferenceStorageBackend:
             v_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
             total_bytes = k_ret.nbytes + v_ret.nbytes
         else:
-            k_raw = os.pread(self._backing_fd, entry["k_size"], entry["k_offset"])
-            v_raw = os.pread(self._backing_fd, entry["v_size"], entry["v_offset"])
+            b_bytes = entry["k_size"] + entry["v_size"]
+            if self.storage_mode == "nvme_qemu":
+                raw_bytes = self._nvme_client.read(entry["k_offset"], b_bytes)
+                k_raw = raw_bytes[:entry["k_size"]]
+                v_raw = raw_bytes[entry["k_size"]:b_bytes]
+            else:
+                k_raw = os.pread(self._backing_fd, entry["k_size"], entry["k_offset"])
+                v_raw = os.pread(self._backing_fd, entry["v_size"], entry["v_offset"])
             k_ret = np.frombuffer(k_raw, dtype=entry["k_dtype"]).reshape(entry["k_shape"]).copy()
             v_ret = np.frombuffer(v_raw, dtype=entry["v_dtype"]).reshape(entry["v_shape"]).copy()
             total_bytes = entry["k_size"] + entry["v_size"]
@@ -498,24 +548,48 @@ class RealInferenceStorageBackend:
         results: Dict[int, np.ndarray] = {}
         total_bytes = 0
 
-        for bid in block_ids:
-            entry = self._storage.get((layer_idx, bid))
-            if entry is None:
-                k_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
-                k_bytes_count = k_ret.nbytes
-                ch = 0
-            else:
-                k_offset = entry["k_offset"]
-                k_size = entry["k_size"]
-                raw_bytes = os.pread(self._backing_fd, k_size, k_offset)
-                k_ret = np.frombuffer(raw_bytes, dtype=entry["k_dtype"]).reshape(entry["k_shape"]).copy()
-                k_bytes_count = k_size
-                ch = entry.get("channel", 0)
+        if self.storage_mode == "nvme_qemu":
+            reqs = []
+            for bid in block_ids:
+                entry = self._storage.get((layer_idx, bid))
+                if entry is not None:
+                    reqs.append((entry["k_offset"], entry["k_size"], bid))
+            raw_dict = self._nvme_client.read_batch(reqs) if reqs else {}
+            for bid in block_ids:
+                entry = self._storage.get((layer_idx, bid))
+                if entry is None:
+                    k_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
+                    k_bytes_count = k_ret.nbytes
+                    ch = 0
+                else:
+                    raw_bytes = raw_dict.get(bid, b"")
+                    k_ret = np.frombuffer(raw_bytes, dtype=entry["k_dtype"]).reshape(entry["k_shape"]).copy()
+                    k_bytes_count = entry["k_size"]
+                    ch = entry.get("channel", 0)
 
-            self._per_channel_reads[ch] += 1
-            self._per_channel_read_bytes[ch] += k_bytes_count
-            total_bytes += k_bytes_count
-            results[bid] = k_ret
+                self._per_channel_reads[ch] += 1
+                self._per_channel_read_bytes[ch] += k_bytes_count
+                total_bytes += k_bytes_count
+                results[bid] = k_ret
+        else:
+            for bid in block_ids:
+                entry = self._storage.get((layer_idx, bid))
+                if entry is None:
+                    k_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
+                    k_bytes_count = k_ret.nbytes
+                    ch = 0
+                else:
+                    k_offset = entry["k_offset"]
+                    k_size = entry["k_size"]
+                    raw_bytes = os.pread(self._backing_fd, k_size, k_offset)
+                    k_ret = np.frombuffer(raw_bytes, dtype=entry["k_dtype"]).reshape(entry["k_shape"]).copy()
+                    k_bytes_count = k_size
+                    ch = entry.get("channel", 0)
+
+                self._per_channel_reads[ch] += 1
+                self._per_channel_read_bytes[ch] += k_bytes_count
+                total_bytes += k_bytes_count
+                results[bid] = k_ret
 
         batch_count = len(block_ids)
         self.storage_batches += 1
@@ -553,24 +627,48 @@ class RealInferenceStorageBackend:
         results: Dict[int, np.ndarray] = {}
         total_bytes = 0
 
-        for bid in block_ids:
-            entry = self._storage.get((layer_idx, bid))
-            if entry is None:
-                v_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
-                v_bytes_count = v_ret.nbytes
-                ch = 0
-            else:
-                v_offset = entry["v_offset"]
-                v_size = entry["v_size"]
-                raw_bytes = os.pread(self._backing_fd, v_size, v_offset)
-                v_ret = np.frombuffer(raw_bytes, dtype=entry["v_dtype"]).reshape(entry["v_shape"]).copy()
-                v_bytes_count = v_size
-                ch = entry.get("channel", 0)
+        if self.storage_mode == "nvme_qemu":
+            reqs = []
+            for bid in block_ids:
+                entry = self._storage.get((layer_idx, bid))
+                if entry is not None:
+                    reqs.append((entry["v_offset"], entry["v_size"], bid))
+            raw_dict = self._nvme_client.read_batch(reqs) if reqs else {}
+            for bid in block_ids:
+                entry = self._storage.get((layer_idx, bid))
+                if entry is None:
+                    v_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
+                    v_bytes_count = v_ret.nbytes
+                    ch = 0
+                else:
+                    raw_bytes = raw_dict.get(bid, b"")
+                    v_ret = np.frombuffer(raw_bytes, dtype=entry["v_dtype"]).reshape(entry["v_shape"]).copy()
+                    v_bytes_count = entry["v_size"]
+                    ch = entry.get("channel", 0)
 
-            self._per_channel_reads[ch] += 1
-            self._per_channel_read_bytes[ch] += v_bytes_count
-            total_bytes += v_bytes_count
-            results[bid] = v_ret
+                self._per_channel_reads[ch] += 1
+                self._per_channel_read_bytes[ch] += v_bytes_count
+                total_bytes += v_bytes_count
+                results[bid] = v_ret
+        else:
+            for bid in block_ids:
+                entry = self._storage.get((layer_idx, bid))
+                if entry is None:
+                    v_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
+                    v_bytes_count = v_ret.nbytes
+                    ch = 0
+                else:
+                    v_offset = entry["v_offset"]
+                    v_size = entry["v_size"]
+                    raw_bytes = os.pread(self._backing_fd, v_size, v_offset)
+                    v_ret = np.frombuffer(raw_bytes, dtype=entry["v_dtype"]).reshape(entry["v_shape"]).copy()
+                    v_bytes_count = v_size
+                    ch = entry.get("channel", 0)
+
+                self._per_channel_reads[ch] += 1
+                self._per_channel_read_bytes[ch] += v_bytes_count
+                total_bytes += v_bytes_count
+                results[bid] = v_ret
 
         batch_count = len(block_ids)
         self.storage_batches += 1
@@ -609,27 +707,56 @@ class RealInferenceStorageBackend:
         results: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
         total_bytes = 0
 
-        for bid in block_ids:
-            entry = self._storage.get((layer_idx, bid))
-            if entry is None:
-                k_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
-                v_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
-                b_bytes = k_ret.nbytes + v_ret.nbytes
-                ch = 0
-            else:
-                k_offset = entry["k_offset"]
-                k_size = entry["k_size"]
-                v_size = entry["v_size"]
-                b_bytes = k_size + v_size
-                raw_bytes = os.pread(self._backing_fd, b_bytes, k_offset)
-                k_ret = np.frombuffer(raw_bytes[:k_size], dtype=entry["k_dtype"]).reshape(entry["k_shape"]).copy()
-                v_ret = np.frombuffer(raw_bytes[k_size:b_bytes], dtype=entry["v_dtype"]).reshape(entry["v_shape"]).copy()
-                ch = entry.get("channel", 0)
+        if self.storage_mode == "nvme_qemu":
+            reqs = []
+            for bid in block_ids:
+                entry = self._storage.get((layer_idx, bid))
+                if entry is not None:
+                    b_bytes = entry["k_size"] + entry["v_size"]
+                    reqs.append((entry["k_offset"], b_bytes, bid))
+            raw_dict = self._nvme_client.read_batch(reqs) if reqs else {}
+            for bid in block_ids:
+                entry = self._storage.get((layer_idx, bid))
+                if entry is None:
+                    k_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
+                    v_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
+                    b_bytes = k_ret.nbytes + v_ret.nbytes
+                    ch = 0
+                else:
+                    raw_bytes = raw_dict.get(bid, b"")
+                    k_size = entry["k_size"]
+                    v_size = entry["v_size"]
+                    b_bytes = k_size + v_size
+                    k_ret = np.frombuffer(raw_bytes[:k_size], dtype=entry["k_dtype"]).reshape(entry["k_shape"]).copy()
+                    v_ret = np.frombuffer(raw_bytes[k_size:b_bytes], dtype=entry["v_dtype"]).reshape(entry["v_shape"]).copy()
+                    ch = entry.get("channel", 0)
 
-            self._per_channel_reads[ch] += 1
-            self._per_channel_read_bytes[ch] += b_bytes
-            total_bytes += b_bytes
-            results[bid] = (k_ret, v_ret)
+                self._per_channel_reads[ch] += 1
+                self._per_channel_read_bytes[ch] += b_bytes
+                total_bytes += b_bytes
+                results[bid] = (k_ret, v_ret)
+        else:
+            for bid in block_ids:
+                entry = self._storage.get((layer_idx, bid))
+                if entry is None:
+                    k_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
+                    v_ret = np.zeros((self.tokens_per_block, self.num_heads, self.head_dim), dtype=np.float32)
+                    b_bytes = k_ret.nbytes + v_ret.nbytes
+                    ch = 0
+                else:
+                    k_offset = entry["k_offset"]
+                    k_size = entry["k_size"]
+                    v_size = entry["v_size"]
+                    b_bytes = k_size + v_size
+                    raw_bytes = os.pread(self._backing_fd, b_bytes, k_offset)
+                    k_ret = np.frombuffer(raw_bytes[:k_size], dtype=entry["k_dtype"]).reshape(entry["k_shape"]).copy()
+                    v_ret = np.frombuffer(raw_bytes[k_size:b_bytes], dtype=entry["v_dtype"]).reshape(entry["v_shape"]).copy()
+                    ch = entry.get("channel", 0)
+
+                self._per_channel_reads[ch] += 1
+                self._per_channel_read_bytes[ch] += b_bytes
+                total_bytes += b_bytes
+                results[bid] = (k_ret, v_ret)
 
         batch_count = len(block_ids)
         self.storage_batches += 1
@@ -703,7 +830,7 @@ class RealInferenceStorageBackend:
 
         analytical_service_time_ms = max_ch_time_us / 1000.0
 
-        return {
+        telemetry = {
             "backend_classification": self.CLASSIFICATION,
             "architecture": {
                 "channels": self.channels,
@@ -749,6 +876,11 @@ class RealInferenceStorageBackend:
             },
             "stored_blocks_count": len(self._storage),
         }
+
+        if getattr(self, "_nvme_client", None) is not None:
+            telemetry["nvme_telemetry"] = self._nvme_client.get_telemetry()
+
+        return telemetry
 
     def reset_stats(self) -> None:
         """Resets all metrics counters to zero (P1 compatible)."""

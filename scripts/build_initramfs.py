@@ -53,6 +53,11 @@ def copy_with_libs(bin_path):
 copy_with_libs("/usr/sbin/nvme")
 copy_with_libs("/usr/bin/fio")
 
+# Compile static nvme_guest_daemon
+daemon_src = os.path.join(os.path.dirname(__file__), "nvme_guest_daemon.c")
+daemon_dest = os.path.join(INITRAMFS_DIR, "usr/bin/nvme_guest_daemon")
+subprocess.run(["gcc", "-O3", "-static", daemon_src, "-o", daemon_dest], check=True)
+
 init_script = """#!/bin/sh
 mount -t proc none /proc
 mount -t sysfs none /sys
@@ -64,23 +69,31 @@ echo "Classification: VIRTUAL-DEVICE"
 echo "Kernel: $(uname -r)"
 echo "=================================================="
 
-for i in 1 2 3; do
+for i in 1 2 3 4 5; do
     if [ -e /dev/nvme0n1 ]; then
         break
     fi
     sleep 1
 done
 
-if [ -e /dev/nvme0n1 ]; then
-    echo "[SUCCESS] Virtual NVMe block device found: /dev/nvme0n1"
-    echo ""
-    echo "--- NVMe Controller Info ---"
-    nvme id-ctrl /dev/nvme0 | grep -E "(sn|mn|fr|mdts|nn|sqes|cqes)"
-    echo ""
-    echo "--- NVMe Namespace Info ---"
-    nvme id-ns /dev/nvme0n1 | grep -E "(nsze|ncap|nuse|lbaf)"
-    echo ""
+if [ ! -e /dev/nvme0n1 ]; then
+    echo "[ERROR] /dev/nvme0n1 not found!"
+    poweroff -f
+fi
 
+echo "[SUCCESS] Virtual NVMe block device found: /dev/nvme0n1"
+echo ""
+echo "--- NVMe Controller Info ---"
+nvme id-ctrl /dev/nvme0 2>/dev/null | grep -E "(sn|mn|fr|mdts|nn|sqes|cqes)"
+echo ""
+echo "--- NVMe Namespace Info ---"
+nvme id-ns /dev/nvme0n1 2>/dev/null | grep -E "(nsze|ncap|nuse|lbaf)"
+echo ""
+
+CMDLINE=$(cat /proc/cmdline)
+
+if echo "$CMDLINE" | grep -q "bench=1"; then
+    echo "=== Running FIO Benchmarks ==="
     echo "=== FIO_START: seq_read_64k ==="
     fio --name=seq_read_64k --filename=/dev/nvme0n1 --direct=1 --rw=read --bs=64k --ioengine=libaio --iodepth=4 --runtime=3 --time_based --group_reporting --output-format=json
     echo "=== FIO_END: seq_read_64k ==="
@@ -102,8 +115,15 @@ if [ -e /dev/nvme0n1 ]; then
     echo "=== FIO_END: rand_read_8k ==="
 
     echo "[VIRTUAL NVME BENCHMARKS COMPLETE]"
-else
-    echo "[ERROR] /dev/nvme0n1 not found!"
+fi
+
+if echo "$CMDLINE" | grep -q "daemon=1"; then
+    echo "=== Starting NVMe Guest Daemon on port 9999 ==="
+    ifconfig lo 127.0.0.1 up 2>/dev/null
+    ifconfig eth0 10.0.2.15 netmask 255.255.255.0 up 2>/dev/null
+    route add default gw 10.0.2.2 eth0 2>/dev/null
+    echo "[READY] NVMe Guest Daemon listening on port 9999 for live I/O"
+    /usr/bin/nvme_guest_daemon /dev/nvme0n1 9999
 fi
 
 echo "=================================================="

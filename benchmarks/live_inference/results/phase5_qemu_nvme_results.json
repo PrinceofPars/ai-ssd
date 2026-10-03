@@ -1,0 +1,192 @@
+{
+  "benchmark_name": "Phase 5 - QEMU/NVMe Live Storage Integration & Tensor-Aware FTL Mapping",
+  "model": "Qwen/Qwen3-4B-Instruct-2507",
+  "precision": "FP32",
+  "cpu_threads": 4,
+  "context_length": 4096,
+  "decode_tokens": 16,
+  "seed": 42,
+  "evidence_classification": "[REAL] / [VIRTUAL-DEVICE] / [FTL-LIVE]",
+  "virtual_device_environment": {
+    "hypervisor": "QEMU 8.2.2 with Linux KVM (-enable-kvm -cpu host -smp 2 -m 2048)",
+    "guest_os": "Minimal Linux Kernel 6.8.0-1017-aws with BusyBox & in-kernel NVMe driver",
+    "controller": "QEMU Virtual NVMe Controller (serial: v2-ai-ssd-001, queues: 8, lba_size: 4096)",
+    "backing_store": "/opt/ai-ssd-v2/images/v2_nvme.raw (4.0 GiB Raw Disk Image)",
+    "guest_daemon": "nvme_guest_daemon (Static C binary executing pread/pwrite on /dev/nvme0n1)",
+    "interconnect": "TCP Loopback socket (127.0.0.1:9999) via QEMU VirtIO network bridge"
+  },
+  "smoke_test_fio_metrics": {
+    "device": "/dev/nvme0n1",
+    "seq_read_64k": {
+      "iops": 21956.7,
+      "bandwidth_mbs": 1372.29,
+      "avg_latency_us": 181.30
+    },
+    "rand_read_8k": {
+      "iops": 25899.4,
+      "bandwidth_mbs": 202.34,
+      "avg_latency_us": 307.90
+    }
+  },
+  "controlled_roundtrip_verification": {
+    "test_name": "test_nvme_block_roundtrip",
+    "geometry": "(16 tokens, 2 heads, 64 dim, float32) = 16,384 bytes/block",
+    "write_latency_us": 2690.25,
+    "read_latency_us": 741.39,
+    "batched_read_latency_us": 348.16,
+    "byte_equality": true,
+    "numerical_tensor_equality": true,
+    "sha256_hash_match": true
+  },
+  "storage_ablations": {
+    "baseline_pytorch_dense": {
+      "classification": "[REAL]",
+      "wall_time_s": 17.4879,
+      "tokens_per_second": 0.9151,
+      "peak_rss_mb": 20075.38,
+      "active_kv_mb": 1156.5,
+      "cold_kv_mb": 0.0,
+      "storage_requests": 0,
+      "storage_batches": 0,
+      "token_match": true
+    },
+    "aissd_file_backed": {
+      "classification": "[REAL] / [STORAGE-BACKED]",
+      "storage_backend": "RealInferenceStorageBackend (File Direct I/O)",
+      "wall_time_s": 10.2404,
+      "tokens_per_second": 1.5626,
+      "peak_rss_mb": 16321.41,
+      "active_kv_mb": 122.625,
+      "cold_kv_mb": 1147.5,
+      "storage_requests": 165780,
+      "storage_batches": 1080,
+      "avg_batch_size": 153.5,
+      "speedup_vs_baseline": 1.71,
+      "p2_resident_payload_mb": 0.0,
+      "p3_resident_payload_mb": 0.0,
+      "token_match": true
+    },
+    "aissd_qemu_nvme_tensor_aware": {
+      "classification": "[REAL] / [VIRTUAL-DEVICE] / [FTL-LIVE]",
+      "storage_backend": "RealInferenceStorageBackend (QEMU NVMe guest controller)",
+      "mapping_mode": "tensor_aware",
+      "wall_time_s": 50.9684,
+      "tokens_per_second": 0.3139,
+      "peak_rss_mb": 17412.62,
+      "min_rss_mb": 16875.97,
+      "avg_rss_mb": 16894.75,
+      "active_kv_mb": 122.625,
+      "cold_kv_mb": 1147.5,
+      "stored_blocks": 9180,
+      "storage_requests": 165780,
+      "storage_batches": 1080,
+      "avg_batch_size": 153.5,
+      "storage_write_bytes": 1203240960,
+      "storage_read_bytes": 621527040,
+      "p2_resident_payload_mb": 0.0,
+      "p3_resident_payload_mb": 0.0,
+      "token_match": true,
+      "channel_distribution": {
+        "channel_read_counts": {
+          "0": 18364,
+          "1": 18217,
+          "2": 18155,
+          "3": 18051,
+          "4": 17984,
+          "5": 18086,
+          "6": 18164,
+          "7": 18315
+        },
+        "max_channel_load": 18364,
+        "min_channel_load": 17984,
+        "mean_channel_load": 18167.0,
+        "load_imbalance_percent": 1.08,
+        "contention_ratio": 1.01
+      },
+      "nvme_telemetry": {
+        "nvme_read_ops": 145336,
+        "nvme_write_ops": 9180,
+        "nvme_read_bytes": 10444865536,
+        "nvme_write_bytes": 1203240960,
+        "total_bytes": 11648106496,
+        "avg_read_latency_us": 270.06,
+        "avg_write_latency_us": 967.61,
+        "total_storage_time_s": 48.132,
+        "storage_throughput_mbs": 230.79
+      }
+    },
+    "aissd_qemu_nvme_conventional": {
+      "classification": "[REAL] / [VIRTUAL-DEVICE] / [FTL-LIVE]",
+      "storage_backend": "RealInferenceStorageBackend (QEMU NVMe guest controller)",
+      "mapping_mode": "conventional",
+      "wall_time_s": 52.2467,
+      "tokens_per_second": 0.3062,
+      "peak_rss_mb": 17512.92,
+      "min_rss_mb": 17160.91,
+      "avg_rss_mb": 17174.82,
+      "active_kv_mb": 122.625,
+      "cold_kv_mb": 1147.5,
+      "stored_blocks": 9180,
+      "storage_requests": 165780,
+      "storage_batches": 1080,
+      "avg_batch_size": 153.5,
+      "storage_write_bytes": 1203240960,
+      "storage_read_bytes": 621527040,
+      "p2_resident_payload_mb": 0.0,
+      "p3_resident_payload_mb": 0.0,
+      "token_match": true,
+      "channel_distribution": {
+        "channel_read_counts": {
+          "0": 145336,
+          "1": 0,
+          "2": 0,
+          "3": 0,
+          "4": 0,
+          "5": 0,
+          "6": 0,
+          "7": 0
+        },
+        "max_channel_load": 145336,
+        "min_channel_load": 0,
+        "mean_channel_load": 18167.0,
+        "load_imbalance_percent": 700.0,
+        "contention_ratio": 8.0
+      },
+      "nvme_telemetry": {
+        "nvme_read_ops": 145336,
+        "nvme_write_ops": 9180,
+        "nvme_read_bytes": 10444865536,
+        "nvme_write_bytes": 1203240960,
+        "total_bytes": 11648106496,
+        "avg_read_latency_us": 277.56,
+        "avg_write_latency_us": 1223.63,
+        "total_storage_time_s": 51.5723,
+        "storage_throughput_mbs": 215.4
+      }
+    }
+  },
+  "canonical_tokens": {
+    "seed": 42,
+    "decode_tokens": 16,
+    "token_ids": [
+      11773,
+      48758,
+      6529,
+      19826,
+      4712,
+      57203,
+      12756,
+      3871,
+      1948,
+      279,
+      3239,
+      4621,
+      323,
+      9144,
+      6894,
+      13
+    ],
+    "generated_text": " hardware accelerated attention scoring engine computes dot products between the query vector and candidate keys.",
+    "match_across_all_modes": true
+  }
+}

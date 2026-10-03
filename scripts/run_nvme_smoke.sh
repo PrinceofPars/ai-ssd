@@ -26,7 +26,7 @@ qemu-system-x86_64 \
     -drive file="$RAW_IMG",format=raw,if=none,id=nvme0 \
     -device nvme,drive=nvme0,serial=v2-ai-ssd-001,num_queues=8,logical_block_size=4096,physical_block_size=4096 \
     -nographic \
-    -append "console=ttyS0 panic=-1 quiet loglevel=3" 2>&1 | tee -a "$LOG_FILE"
+    -append "console=ttyS0 panic=-1 quiet loglevel=3 bench=1" 2>&1 | tee -a "$LOG_FILE"
 
 echo "" | tee -a "$LOG_FILE"
 echo "=== Virtual NVMe Smoke Test Finished Cleanly ===" | tee -a "$LOG_FILE"
