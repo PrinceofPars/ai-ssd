@@ -5,6 +5,7 @@ Reads configuration from config.yaml (or CLI overrides), executes canonical
 live inference runs for BASELINE and AI-SSD, and outputs structured JSON and CSV.
 
 Zero analytical timing injection; zero artificial sleeps; 100% genuine model execution.
+Process RAM telemetry sampled continuously (2ms interval) via psutil.
 """
 
 import sys
@@ -42,6 +43,8 @@ def load_config(config_path: Path) -> Dict[str, Any]:
 def main():
     parser = argparse.ArgumentParser(description="AI-SSD V2 Live Inference Reproducible Benchmark")
     parser.add_argument("--config", type=str, default=str(Path(__file__).parent / "config.yaml"), help="Path to config.yaml")
+    parser.add_argument("--model", type=str, default=None, help="Override model name")
+    parser.add_argument("--dtype", type=str, default=None, help="Override dtype (FP32, BF16, FP16)")
     parser.add_argument("--context", type=int, default=None, help="Override context length")
     parser.add_argument("--decode", type=int, default=None, help="Override decode token count")
     parser.add_argument("--repetitions", type=int, default=None, help="Override repetitions")
@@ -62,8 +65,8 @@ def main():
     enable_prefetch = not args.no_prefetch if args.no_prefetch else a_cfg.get("enable_prefetch", True)
     channels = a_cfg.get("channels", 8)
     threads = b_cfg.get("threads", 4)
-    model_name = b_cfg.get("model_name", "Qwen/Qwen2.5-0.5B")
-    dtype = b_cfg.get("dtype", "float32")
+    model_name = args.model or b_cfg.get("model_name", "Qwen/Qwen2.5-0.5B")
+    dtype = args.dtype or b_cfg.get("dtype", "float32")
     seed = b_cfg.get("seed", 42)
 
     output_dir = Path(args.output_dir)
@@ -84,7 +87,8 @@ def main():
     print("=" * 64)
 
     # Initialize Engine
-    engine = RealLLMEngine(model_name=model_name, device="cpu", dtype="FP32", num_threads=threads)
+    print(f"\n[INIT] Loading engine and weights for {model_name} ({dtype})...")
+    engine = RealLLMEngine(model_name=model_name, device="cpu", dtype=dtype, num_threads=threads)
     prompt = build_prompt_for_length(engine, target_tokens=context_len)
     inputs = engine.tokenizer(prompt, return_tensors="pt")
     input_ids = inputs["input_ids"]
@@ -103,17 +107,28 @@ def main():
         baseline_runs.append(res)
         last_baseline_res = res
         baseline_peak_rss = max(baseline_peak_rss, res_rss)
-        print(f"  Rep {r+1}/{repetitions}: {res['wall_time_s']:.4f}s ({res_tps:.2f} tok/s, RSS: {res_rss:.1f} MB)")
+        print(f"  Rep {r+1}/{repetitions}: {res['wall_time_s']:.4f}s ({res_tps:.2f} tok/s, RSS min/avg/peak: {res['min_rss_mb']:.1f}/{res['avg_rss_mb']:.1f}/{res_rss:.1f} MB)")
 
     b_times = [r["wall_time_s"] for r in baseline_runs]
     b_thrs = [r["tokens_per_second"] for r in baseline_runs]
+    b_min_rss = [r.get("min_rss_mb", r["peak_rss_mb"]) for r in baseline_runs]
+    b_avg_rss = [r.get("avg_rss_mb", r["peak_rss_mb"]) for r in baseline_runs]
+    b_peak_rss = [r["peak_rss_mb"] for r in baseline_runs]
+
     baseline_summary = {
         "wall_time_mean_s": float(np.mean(b_times)),
         "wall_time_std_s": float(np.std(b_times)),
         "throughput_mean_tok_s": float(np.mean(b_thrs)),
         "throughput_std_tok_s": float(np.std(b_thrs)),
-        "peak_rss_mb": float(baseline_peak_rss),
+        "min_rss_mean_mb": float(np.mean(b_min_rss)),
+        "min_rss_std_mb": float(np.std(b_min_rss)),
+        "avg_rss_mean_mb": float(np.mean(b_avg_rss)),
+        "avg_rss_std_mb": float(np.std(b_avg_rss)),
+        "peak_rss_mean_mb": float(np.mean(b_peak_rss)),
+        "peak_rss_std_mb": float(np.std(b_peak_rss)),
+        "peak_rss_mb": float(np.max(b_peak_rss)),
         "kv_memory_mb": float(last_baseline_res["kv_memory_mb"]),
+        "non_kv_ram_peak_mb": float(np.mean(b_peak_rss) - last_baseline_res["kv_memory_mb"]),
     }
 
     # 2. AI-SSD Benchmark
@@ -122,7 +137,17 @@ def main():
     aissd_peak_rss = 0.0
     last_aissd_res = None
     for r in range(repetitions):
-        backend = create_default_storage_backend(channels=channels, enable_prefetch=enable_prefetch)
+        num_layers = getattr(engine.model.config, "num_hidden_layers", 24)
+        num_kv_heads = getattr(engine.model.config, "num_key_value_heads", 2)
+        head_dim = getattr(engine.model.config, "head_dim", 64)
+        backend = create_default_storage_backend(
+            channels=channels,
+            enable_prefetch=enable_prefetch,
+            num_layers=num_layers,
+            num_heads=num_kv_heads,
+            head_dim=head_dim,
+            dtype=dtype,
+        )
         res = run_aissd_decode(
             engine.model,
             engine.tokenizer,
@@ -140,19 +165,30 @@ def main():
         aissd_runs.append(res)
         last_aissd_res = res
         aissd_peak_rss = max(aissd_peak_rss, res_rss)
-        print(f"  Rep {r+1}/{repetitions}: {res['wall_time_s']:.4f}s ({res_tps:.2f} tok/s, RSS: {res_rss:.1f} MB)")
+        print(f"  Rep {r+1}/{repetitions}: {res['wall_time_s']:.4f}s ({res_tps:.2f} tok/s, RSS min/avg/peak: {res['min_rss_mb']:.1f}/{res['avg_rss_mb']:.1f}/{res_rss:.1f} MB)")
 
     a_times = [r["wall_time_s"] for r in aissd_runs]
     a_thrs = [r["tokens_per_second"] for r in aissd_runs]
+    a_min_rss = [r.get("min_rss_mb", r["peak_rss_mb"]) for r in aissd_runs]
+    a_avg_rss = [r.get("avg_rss_mb", r["peak_rss_mb"]) for r in aissd_runs]
+    a_peak_rss = [r["peak_rss_mb"] for r in aissd_runs]
+
     aissd_summary = {
         "wall_time_mean_s": float(np.mean(a_times)),
         "wall_time_std_s": float(np.std(a_times)),
         "throughput_mean_tok_s": float(np.mean(a_thrs)),
         "throughput_std_tok_s": float(np.std(a_thrs)),
-        "peak_rss_mb": float(aissd_peak_rss),
+        "min_rss_mean_mb": float(np.mean(a_min_rss)),
+        "min_rss_std_mb": float(np.std(a_min_rss)),
+        "avg_rss_mean_mb": float(np.mean(a_avg_rss)),
+        "avg_rss_std_mb": float(np.std(a_avg_rss)),
+        "peak_rss_mean_mb": float(np.mean(a_peak_rss)),
+        "peak_rss_std_mb": float(np.std(a_peak_rss)),
+        "peak_rss_mb": float(np.max(a_peak_rss)),
         "kv_active_dram_mb": float(last_aissd_res["kv_memory_mb"]),
         "kv_offload_pct": float(last_aissd_res["kv_offloaded_pct"]),
         "kv_blocks_read": int(last_aissd_res["kv_blocks_read"]),
+        "non_kv_ram_peak_mb": float(np.mean(a_peak_rss) - last_aissd_res["kv_memory_mb"]),
     }
 
     # Storage & Prefetch Telemetry
@@ -252,10 +288,16 @@ def main():
         "prefetch": enable_prefetch,
         "baseline_tok_s": f"{baseline_summary['throughput_mean_tok_s']:.2f}",
         "baseline_wall_s": f"{baseline_summary['wall_time_mean_s']:.4f}",
-        "baseline_rss_mb": f"{baseline_summary['peak_rss_mb']:.1f}",
+        "baseline_min_rss_mb": f"{baseline_summary['min_rss_mean_mb']:.1f}",
+        "baseline_avg_rss_mb": f"{baseline_summary['avg_rss_mean_mb']:.1f}",
+        "baseline_peak_rss_mb": f"{baseline_summary['peak_rss_mean_mb']:.1f}",
+        "baseline_kv_mb": f"{baseline_summary['kv_memory_mb']:.2f}",
         "aissd_tok_s": f"{aissd_summary['throughput_mean_tok_s']:.2f}",
         "aissd_wall_s": f"{aissd_summary['wall_time_mean_s']:.4f}",
-        "aissd_rss_mb": f"{aissd_summary['peak_rss_mb']:.1f}",
+        "aissd_min_rss_mb": f"{aissd_summary['min_rss_mean_mb']:.1f}",
+        "aissd_avg_rss_mb": f"{aissd_summary['avg_rss_mean_mb']:.1f}",
+        "aissd_peak_rss_mb": f"{aissd_summary['peak_rss_mean_mb']:.1f}",
+        "aissd_kv_mb": f"{aissd_summary['kv_active_dram_mb']:.2f}",
         "throughput_retention_pct": f"{(aissd_summary['throughput_mean_tok_s'] / max(1e-6, baseline_summary['throughput_mean_tok_s'])) * 100.0:.1f}",
         "dram_reduction_pct": f"{aissd_summary['kv_offload_pct']:.1f}",
         "storage_bytes_read": storage_summary["bytes_read"],
@@ -284,7 +326,22 @@ def main():
     print(f"Storage Reads       : {storage_summary['bytes_read']:,} B across {storage_summary['channels_active']}/8 channels")
     print(f"Prefetch Hit Rate   : {prefetch_summary['demand_hit_rate_pct']:.1f}% ({prefetch_summary['useful_prefetches']} useful / 0 wasted)")
     print(f"Accuracy Token Match: {accuracy_summary['token_match_pct']:.1f}% ({accuracy_summary['token_matches']}/{accuracy_summary['token_count']})")
+    
+    print("\n" + "=" * 64)
+    print("                  PROCESS RAM TELEMETRY (MB)")
     print("=" * 64)
+    print(f"| {'Metric':<22} | {'Baseline':<18} | {'AI-SSD':<18} |")
+    print(f"|{'-'*24}|{'-'*20}|{'-'*20}|")
+    print(f"| {'Min RSS':<22} | {baseline_summary['min_rss_mean_mb']:>7.1f} ? {baseline_summary['min_rss_std_mb']:<6.1f} MB | {aissd_summary['min_rss_mean_mb']:>7.1f} ? {aissd_summary['min_rss_std_mb']:<6.1f} MB |")
+    print(f"| {'Avg RSS':<22} | {baseline_summary['avg_rss_mean_mb']:>7.1f} ? {baseline_summary['avg_rss_std_mb']:<6.1f} MB | {aissd_summary['avg_rss_mean_mb']:>7.1f} ? {aissd_summary['avg_rss_std_mb']:<6.1f} MB |")
+    print(f"| {'Peak RSS':<22} | {baseline_summary['peak_rss_mean_mb']:>7.1f} ? {baseline_summary['peak_rss_std_mb']:<6.1f} MB | {aissd_summary['peak_rss_mean_mb']:>7.1f} ? {aissd_summary['peak_rss_std_mb']:<6.1f} MB |")
+    print(f"| {'KV memory (active)':<22} | {baseline_summary['kv_memory_mb']:>14.2f} MB | {aissd_summary['kv_active_dram_mb']:>14.2f} MB |")
+    print(f"| {'KV reduction':<22} | {'0.0%':>17} | {aissd_summary['kv_offload_pct']:>16.1f}% |")
+    print(f"| {'Non-KV RAM (Peak-KV)':<22} | {baseline_summary['non_kv_ram_peak_mb']:>14.1f} MB | {aissd_summary['non_kv_ram_peak_mb']:>14.1f} MB |")
+    print("=" * 64)
+    print("* Note: Continuous process RSS was sampled at 2ms intervals during decode.")
+    print("  Non-KV RAM is directly derived as Peak RSS minus KV Cache memory,")
+    print("  accounting for model weights, computational activations, and PyTorch runtime.\n")
     print(f"[SUCCESS] Results written to:\n  JSON: {json_path}\n  CSV : {csv_path}\n")
 
 

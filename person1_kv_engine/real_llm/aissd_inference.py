@@ -17,6 +17,7 @@ import math
 import gc
 import logging
 import psutil
+import threading
 import torch
 import numpy as np
 from transformers.models.qwen2.modeling_qwen2 import apply_rotary_pos_emb
@@ -76,6 +77,48 @@ for _p3_path in _candidate_p3_paths:
             break
         except Exception:
             pass
+
+
+class ProcessMemorySampler:
+    """Threaded high-resolution process RSS sampler.
+    
+    Samples actual OS process Resident Set Size (RSS) continuously during
+    decode execution interval to accurately determine minimum, average,
+    and peak memory without estimation.
+    """
+    def __init__(self, sample_interval_s: float = 0.002):
+        self.sample_interval_s = sample_interval_s
+        self.samples: List[float] = []
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._proc = psutil.Process()
+
+    def start(self):
+        self.samples = [self._proc.memory_info().rss / (1024.0 * 1024.0)]
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> Dict[str, float]:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=0.5)
+        self.samples.append(self._proc.memory_info().rss / (1024.0 * 1024.0))
+        return {
+            "min_rss_mb": float(np.min(self.samples)),
+            "avg_rss_mb": float(np.mean(self.samples)),
+            "peak_rss_mb": float(np.max(self.samples)),
+            "std_rss_mb": float(np.std(self.samples)),
+            "sample_count": len(self.samples),
+        }
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                self.samples.append(self._proc.memory_info().rss / (1024.0 * 1024.0))
+            except Exception:
+                pass
+            time.sleep(self.sample_interval_s)
 
 
 def get_current_rss_mb() -> float:
@@ -171,9 +214,12 @@ def create_default_storage_backend(
         )
 
     if enable_prefetch and _P3_AVAILABLE and RealInferencePrefetchAdapter is not None:
+        bytes_per_elem = 4 if str(dtype).lower() in ("fp32", "float32") else 2
+        block_bytes = tokens_per_block * num_heads * head_dim * bytes_per_elem * 2
         adapter = RealInferencePrefetchAdapter(
             storage_backend=backend,
             buffer_capacity_blocks=buffer_capacity_blocks,
+            bytes_per_block=block_bytes,
             tokens_per_block=tokens_per_block,
             kv_heads_per_block=num_heads,
             head_dim=head_dim,
@@ -216,10 +262,28 @@ class AISSDKVManager:
 
     def init_from_prefill(self, past_key_values: Any) -> None:
         """Blockizes the prefill KV cache and offloads historical blocks to storage backend."""
+        if hasattr(past_key_values, "layers"):
+            self.num_layers = len(past_key_values.layers)
+            first_k = past_key_values.layers[0].keys
+        elif hasattr(past_key_values, "key_cache"):
+            self.num_layers = len(past_key_values.key_cache)
+            first_k = past_key_values.key_cache[0]
+        else:
+            self.num_layers = len(past_key_values)
+            first_k = past_key_values[0][0]
+        self.num_kv_heads = first_k.shape[1]
+        self.head_dim = first_k.shape[3]
+        self.dtype = first_k.dtype
         for l_idx in range(self.num_layers):
-            layer = past_key_values.layers[l_idx]
-            k_tensor = layer.keys  # [1, num_kv_heads, seq_len, head_dim]
-            v_tensor = layer.values
+            if hasattr(past_key_values, "layers"):
+                k_tensor = past_key_values.layers[l_idx].keys
+                v_tensor = past_key_values.layers[l_idx].values
+            elif hasattr(past_key_values, "key_cache"):
+                k_tensor = past_key_values.key_cache[l_idx]
+                v_tensor = past_key_values.value_cache[l_idx]
+            else:
+                k_tensor = past_key_values[l_idx][0]
+                v_tensor = past_key_values[l_idx][1]
             seq_len = k_tensor.shape[2]
 
             # 1. Attention Sinks: retain in host DRAM
@@ -246,8 +310,8 @@ class AISSDKVManager:
                 for b_start in range(0, total_hist_tok, self.tokens_per_block):
                     b_end = min(b_start + self.tokens_per_block, total_hist_tok)
                     tok_count = b_end - b_start
-                    k_blk = np.zeros((self.tokens_per_block, 2, self.head_dim), dtype=np.float32)
-                    v_blk = np.zeros((self.tokens_per_block, 2, self.head_dim), dtype=np.float32)
+                    k_blk = np.zeros((self.tokens_per_block, self.num_kv_heads, self.head_dim), dtype=np.float32)
+                    v_blk = np.zeros((self.tokens_per_block, self.num_kv_heads, self.head_dim), dtype=np.float32)
                     k_blk[:tok_count] = k_t[b_start:b_end]
                     v_blk[:tok_count] = v_t[b_start:b_end]
                     self.backend.write_block(l_idx, bid, k_blk, v_blk)
@@ -285,7 +349,7 @@ class AISSDKVManager:
         ld = self.layer_data[l_idx]
         cand_bids = ld["candidate_blocks"]
 
-        q_np = query_states[0, :, 0, :].cpu().numpy()  # [num_q_heads=14, head_dim=64]
+        q_np = query_states[0, :, 0, :].to(torch.float32).cpu().numpy()
         scale = 1.0 / math.sqrt(self.head_dim)
 
         selected_k_blocks = []
@@ -335,8 +399,10 @@ class AISSDKVManager:
             for _, bid, actual_tokens in top_bids:
                 v_blk = self.backend.read_value_page(l_idx, bid)
                 k_blk = loaded_k_pages[bid]
-                k_t = torch.from_numpy(k_blk[:actual_tokens]).permute(1, 0, 2).unsqueeze(0)
-                v_t = torch.from_numpy(v_blk[:actual_tokens]).permute(1, 0, 2).unsqueeze(0)
+                target_dtype = ld["sink_k"].dtype
+                target_device = ld["sink_k"].device
+                k_t = torch.from_numpy(k_blk[:actual_tokens]).to(dtype=target_dtype, device=target_device).permute(1, 0, 2).unsqueeze(0)
+                v_t = torch.from_numpy(v_blk[:actual_tokens]).to(dtype=target_dtype, device=target_device).permute(1, 0, 2).unsqueeze(0)
                 selected_k_blocks.append(k_t)
                 selected_v_blocks.append(v_t)
 
@@ -362,8 +428,8 @@ class AISSDKVManager:
         # Active DRAM tokens = sinks (4) + recent (16) + selected Top-k (k_val * 16)
         active_tokens = self.sink_tokens + self.recent_tokens + (k_val * self.tokens_per_block)
 
-        # 2 KV heads, 64 head_dim, 4 bytes FP32, K+V factor 2, 24 layers
-        bytes_per_tok_all_layers = 2 * self.head_dim * 4 * 2 * self.num_layers
+        num_kv_heads = getattr(self, "num_kv_heads", 2)
+        bytes_per_tok_all_layers = num_kv_heads * self.head_dim * 4 * 2 * self.num_layers
         total_kv_bytes = total_tokens * bytes_per_tok_all_layers
         active_dram_bytes = active_tokens * bytes_per_tok_all_layers
 
@@ -404,7 +470,9 @@ def run_baseline_decode(
     generated_tokens = [next_token.item()]
     step_logits = [prefill_out.logits[:, -1, :].clone()]
 
-    # 2. Generation execution interval (measured strictly)
+    # 2. Generation execution interval (measured strictly with high-res RSS sampler)
+    sampler = ProcessMemorySampler(sample_interval_s=0.002)
+    sampler.start()
     t_start = time.perf_counter()
     for step in range(1, decode_tokens):
         with torch.no_grad():
@@ -414,15 +482,18 @@ def run_baseline_decode(
         generated_tokens.append(next_token.item())
         step_logits.append(step_out.logits[:, -1, :].clone())
     t_end = time.perf_counter()
+    proc_mem = sampler.stop()
 
     wall_time = t_end - t_start
     tps = len(generated_tokens) / max(1e-6, wall_time)
-    peak_rss = get_current_rss_mb()
 
-    # Compute exact in-memory KV-cache bytes
+    # Dynamic KV-cache computation based on model architecture
+    num_layers = getattr(model.config, "num_hidden_layers", 24)
+    num_kv_heads = getattr(model.config, "num_key_value_heads", getattr(model.config, "num_attention_heads", 2))
+    head_dim = getattr(model.config, "head_dim", 64)
+    bytes_per_elem = 4 if getattr(model, "dtype", torch.float32) == torch.float32 else 2
     total_tokens = input_ids.shape[1] + decode_tokens
-    # 24 layers * 2 KV heads * 64 dim * 4 bytes * 2 (K+V)
-    total_kv_bytes = total_tokens * 24 * 2 * 64 * 4 * 2
+    total_kv_bytes = total_tokens * num_layers * num_kv_heads * head_dim * bytes_per_elem * 2
     total_kv_mb = total_kv_bytes / (1024.0 * 1024.0)
 
     generated_text = tokenizer.decode(generated_tokens)
@@ -432,8 +503,12 @@ def run_baseline_decode(
         "wall_time_s": wall_time,
         "generated_tokens": len(generated_tokens),
         "tokens_per_second": tps,
-        "peak_rss_mb": peak_rss,
-        "rss_increment_mb": peak_rss - rss_before,
+        "min_rss_mb": proc_mem["min_rss_mb"],
+        "avg_rss_mb": proc_mem["avg_rss_mb"],
+        "peak_rss_mb": proc_mem["peak_rss_mb"],
+        "std_rss_mb": proc_mem["std_rss_mb"],
+        "rss_sample_count": proc_mem["sample_count"],
+        "rss_increment_mb": proc_mem["peak_rss_mb"] - rss_before,
         "kv_memory_mb": total_kv_mb,
         "kv_offloaded_pct": 0.0,
         "kv_blocks_read": 0,
@@ -532,7 +607,9 @@ def run_aissd_decode(
         generated_tokens = [next_token.item()]
         step_logits = [prefill_out.logits[:, -1, :].clone()]
 
-        # 2. Generation execution interval (measured strictly)
+        # 2. Generation execution interval (measured strictly with high-res RSS sampler)
+        sampler = ProcessMemorySampler(sample_interval_s=0.002)
+        sampler.start()
         t_start = time.perf_counter()
         for step in range(1, decode_tokens):
             with torch.no_grad():
@@ -542,6 +619,7 @@ def run_aissd_decode(
             generated_tokens.append(next_token.item())
             step_logits.append(step_out.logits[:, -1, :].clone())
         t_end = time.perf_counter()
+        proc_mem = sampler.stop()
 
     finally:
         # Always restore original forwards
@@ -550,7 +628,6 @@ def run_aissd_decode(
 
     wall_time = t_end - t_start
     tps = len(generated_tokens) / max(1e-6, wall_time)
-    peak_rss = get_current_rss_mb()
     mem_stats = kv_mgr.get_memory_stats()
 
     if hasattr(backend, "buffer_capacity_blocks") or "Prefetch" in backend.__class__.__name__:
@@ -567,8 +644,12 @@ def run_aissd_decode(
         "wall_time_s": wall_time,
         "generated_tokens": len(generated_tokens),
         "tokens_per_second": tps,
-        "peak_rss_mb": peak_rss,
-        "rss_increment_mb": peak_rss - rss_before,
+        "min_rss_mb": proc_mem["min_rss_mb"],
+        "avg_rss_mb": proc_mem["avg_rss_mb"],
+        "peak_rss_mb": proc_mem["peak_rss_mb"],
+        "std_rss_mb": proc_mem["std_rss_mb"],
+        "rss_sample_count": proc_mem["sample_count"],
+        "rss_increment_mb": proc_mem["peak_rss_mb"] - rss_before,
         "kv_memory_mb": mem_stats["active_dram_mb"],
         "kv_offloaded_pct": mem_stats["offload_pct"],
         "kv_blocks_read": getattr(backend, "blocks_read", 0),

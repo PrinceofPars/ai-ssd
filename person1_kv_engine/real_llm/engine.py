@@ -57,7 +57,12 @@ class RealLLMEngine:
         t0 = time.time()
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
 
-        torch_dtype = torch.float32 if self.dtype_str in ("FP32", "FLOAT32") else torch.float16
+        if self.dtype_str in ("FP32", "FLOAT32"):
+            torch_dtype = torch.float32
+        elif self.dtype_str in ("BF16", "BFLOAT16"):
+            torch_dtype = torch.bfloat16
+        else:
+            torch_dtype = torch.float16
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_name,
             dtype=torch_dtype,

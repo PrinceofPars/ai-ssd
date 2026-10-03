@@ -1,0 +1,86 @@
+{
+  "timestamp_utc": "2026-10-03T11:48:42.232757Z",
+  "benchmark_metadata": {
+    "model": "Qwen/Qwen2.5-0.5B",
+    "context_length": 512,
+    "decode_tokens": 16,
+    "threads": 4,
+    "dtype": "float32",
+    "seed": 42,
+    "repetitions": 3
+  },
+  "baseline": {
+    "wall_time_mean_s": 0.8124487083329465,
+    "wall_time_std_s": 0.0022539507542755585,
+    "throughput_mean_tok_s": 19.693702535814136,
+    "throughput_std_tok_s": 0.054654142404798906,
+    "min_rss_mean_mb": 2746.8841145833335,
+    "min_rss_std_mb": 1.4304640328142986,
+    "avg_rss_mean_mb": 2747.0069558662276,
+    "avg_rss_std_mb": 1.5833482242456087,
+    "peak_rss_mean_mb": 2747.0078125,
+    "peak_rss_std_mb": 1.5844294451526286,
+    "peak_rss_mb": 2749.0078125,
+    "kv_memory_mb": 12.375,
+    "non_kv_ram_peak_mb": 2734.6328125
+  },
+  "ai_ssd": {
+    "wall_time_mean_s": 0.992852663666478,
+    "wall_time_std_s": 0.00883880107434035,
+    "throughput_mean_tok_s": 16.11645637177374,
+    "throughput_std_tok_s": 0.14330696670318857,
+    "min_rss_mean_mb": 2771.0950520833335,
+    "min_rss_std_mb": 16.189844250567663,
+    "avg_rss_mean_mb": 2776.245110739819,
+    "avg_rss_std_mb": 9.728332380793256,
+    "peak_rss_mean_mb": 2779.4401041666665,
+    "peak_rss_std_mb": 6.652530942552862,
+    "peak_rss_mb": 2788.84765625,
+    "kv_active_dram_mb": 1.96875,
+    "kv_offload_pct": 84.0607210626186,
+    "kv_blocks_read": 12600,
+    "non_kv_ram_peak_mb": 2777.4713541666665
+  },
+  "storage": {
+    "bytes_read": 51609600,
+    "total_requests": 12884,
+    "channels_active": 8,
+    "channel_reads": {
+      "0": 1132,
+      "1": 919,
+      "2": 1073,
+      "3": 1035,
+      "4": 1091,
+      "5": 1050,
+      "6": 1128,
+      "7": 1112
+    },
+    "load_imbalance_pct": 6.04,
+    "contention_ratio": 1.06
+  },
+  "prefetch": {
+    "demand_requests": 12600,
+    "demand_hits": 4344,
+    "demand_misses": 8256,
+    "demand_hit_rate_pct": 34.48,
+    "prefetch_requests": 284,
+    "useful_prefetches": 284,
+    "useful_bytes": 1163264,
+    "wasted_bytes": 0,
+    "staging_memory_mb": 2.2188,
+    "peak_memory_mb": 2.2188
+  },
+  "top_k": {
+    "ratio": 0.1,
+    "percent": 10.0
+  },
+  "accuracy": {
+    "token_matches": 9,
+    "token_count": 16,
+    "token_match_pct": 56.25,
+    "logits_cosine_similarity": 0.41089531779289246,
+    "logits_mse": 24.82756233215332,
+    "baseline_text": " solid state drive controller over the PCIe NVMe bus. The controller embedded processing unit",
+    "aissd_text": " solid state drive controller over the PCIe NVMe drive over the PCIe NVMeBus"
+  }
+}

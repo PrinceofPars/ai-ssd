@@ -1,0 +1,86 @@
+{
+  "timestamp_utc": "2026-10-03T11:54:02.977582Z",
+  "benchmark_metadata": {
+    "model": "Qwen/Qwen3-4B-Instruct-2507",
+    "context_length": 128,
+    "decode_tokens": 16,
+    "threads": 4,
+    "dtype": "float32",
+    "seed": 42,
+    "repetitions": 1
+  },
+  "baseline": {
+    "wall_time_mean_s": 5.0817815760001395,
+    "wall_time_std_s": 0.0,
+    "throughput_mean_tok_s": 3.1485021071278645,
+    "throughput_std_tok_s": 0.0,
+    "min_rss_mean_mb": 15999.828125,
+    "min_rss_std_mb": 0.0,
+    "avg_rss_mean_mb": 16000.195027960526,
+    "avg_rss_std_mb": 0.0,
+    "peak_rss_mean_mb": 16000.19921875,
+    "peak_rss_std_mb": 0.0,
+    "peak_rss_mb": 16000.19921875,
+    "kv_memory_mb": 40.5,
+    "non_kv_ram_peak_mb": 15959.69921875
+  },
+  "ai_ssd": {
+    "wall_time_mean_s": 5.207792167999287,
+    "wall_time_std_s": 0.0,
+    "throughput_mean_tok_s": 3.0723192254707103,
+    "throughput_std_tok_s": 0.0,
+    "min_rss_mean_mb": 16066.1484375,
+    "min_rss_std_mb": 0.0,
+    "avg_rss_mean_mb": 16095.305984760802,
+    "avg_rss_std_mb": 0.0,
+    "peak_rss_mean_mb": 16104.25,
+    "peak_rss_std_mb": 0.0,
+    "peak_rss_mb": 16104.25,
+    "kv_active_dram_mb": 10.125,
+    "kv_offload_pct": 74.82517482517483,
+    "kv_blocks_read": 4320,
+    "non_kv_ram_peak_mb": 16094.125
+  },
+  "storage": {
+    "bytes_read": 17694720,
+    "total_requests": 4416,
+    "channels_active": 8,
+    "channel_reads": {
+      "0": 319,
+      "1": 365,
+      "2": 327,
+      "3": 425,
+      "4": 339,
+      "5": 341,
+      "6": 402,
+      "7": 418
+    },
+    "load_imbalance_pct": 15.8,
+    "contention_ratio": 1.16
+  },
+  "prefetch": {
+    "demand_requests": 4320,
+    "demand_hits": 1480,
+    "demand_misses": 2840,
+    "demand_hit_rate_pct": 34.26,
+    "prefetch_requests": 96,
+    "useful_prefetches": 96,
+    "useful_bytes": 393216,
+    "wasted_bytes": 0,
+    "staging_memory_mb": 12.0,
+    "peak_memory_mb": 12.0
+  },
+  "top_k": {
+    "ratio": 0.1,
+    "percent": 10.0
+  },
+  "accuracy": {
+    "token_matches": 1,
+    "token_count": 16,
+    "token_match_pct": 6.25,
+    "logits_cosine_similarity": 0.7788053750991821,
+    "logits_mse": 76.85153198242188,
+    "baseline_text": " solid state drive controller over the PCIe NVMe bus. The controller embedded processing unit",
+    "aissd_text": " solid to the \\ \\ \\eneration to \\du to \\ \\ \\ \\ \\"
+  }
+}
