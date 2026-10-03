@@ -18,46 +18,40 @@ Worktree:
 
 ## Current State
 
-PHASE 5C COMPLETE — REAL INFERENCE PREFETCH ADAPTER VERIFIED
+LIVE PREFETCH INTEGRATION PREPARATION COMPLETE — READY FOR P1 WRAPPER INTEGRATION
 
 ---
 
 ## Current Session
 
 Session ID:
-S05-V2-PHASE5C-INFERENCE-ADAPTER
+S06-V2-LIVE-PREFETCH-INTEGRATION
 
 Started:
-2026-10-03T02:00:00+05:30
+2026-10-03T11:30:00+05:30
 
 Last Updated:
-2026-10-03T02:30:00+05:30
+2026-10-03T11:55:00+05:30
+
+Current Phase:
+Phase 5C Extension — Live Inference Prefetch Adapter & P2 Backend Wrapper
 
 ---
 
-## Current Milestone
+## Completed Work
 
-M3: System Performance Verification & Multi-Tier Ablations
-
----
-
-## Current Task
-
-Phase 3: Real Prefetch Evaluation, System Ablations, Virtual NVMe Baseline, and Artifact Generation
-
----
-
-## Completed
-
-- **Phase 5C Real Inference Prefetch Adapter (`person3_system/prefetch/inference_adapter.py`)**:
-  - Implemented `RealInferencePrefetchAdapter` exposing `V2Prefetcher` directly to real LLM inference loops (P1).
-  - Returns actual tensor data (`[kv_heads, tokens, head_dim]` in FP32) or raw byte slices (`KEY` 4KB, `VALUE` 4KB, `BOTH` 8KB).
+- **Live Inference Prefetch Adapter & P2 Wrapper (`person3_system/prefetch/inference_adapter.py`)**:
+  - Implemented `RealInferencePrefetchAdapter` as a dual-purpose prefetch engine and wrapper for P2's `RealInferenceStorageBackend`.
+  - Implements all P1 `AISSDKVManager` storage backend APIs: `write_block`, `read_key_page`, `read_value_page`, `read_block`, `contains_block`, `evict_block`, `get_telemetry`, `reset_stats`.
+  - Implements unified access and prefetch methods: `read`, `prefetch`, `prefetch_blocks`, `predict_and_prefetch`, `record_hit`, `record_miss`.
+  - Returns actual tensor data (`[16, 2, 64]` or `[1, 16, 64]` in float32) or raw byte slices (`KEY` 4KB, `VALUE` 4KB, `BOTH` 8KB) without altering tensor semantics.
+  - Prefetched data is NOT metadata-only: extracts and stages actual NumPy array tensors and bytes in host DRAM staging (`StagedInferenceBlock`).
   - Directly ingests `KVBlockAdapter.blockize_layer()` output via `register_blocks_from_adapter()`.
   - Non-blocking speculative prefetch with LRU host DRAM staging buffer and background storage I/O.
-  - Full metric tracking: demand reads, prefetch requests, useful prefetches, late prefetches, useless prefetches, bytes, latencies.
-  - Zero artificial latency injection; no analytical 620.88 tok/s model dependencies.
-  - Added 10 comprehensive tests in `tests/test_inference_prefetch_adapter.py` (37/37 tests passing across P3).
-  - Authored `docs/v2/P3_REAL_INFERENCE_PREFETCH.md`.
+  - Full metric tracking: demand requests, demand hits, demand misses, prefetch requests, useful prefetches, useless prefetches, useful bytes, wasted bytes, staging memory, latencies.
+  - Zero artificial latency injection; no `time.sleep()`.
+  - Added 11 comprehensive tests in `tests/test_inference_prefetch_adapter.py` (38/38 tests passing across P3).
+  - Authored `docs/v2/P3_LIVE_PREFETCH_INTEGRATION.md` and `docs/v2/P3_REAL_INFERENCE_PREFETCH.md`.
 
 - **Phase 3 Real Prefetch Evaluation (`benchmarks/run_phase3_eval.py`)**:
   - Replayed real Qwen2.5-0.5B KV trace (7,872 events, 512 context tokens) across 4 prefetch configurations:
@@ -85,17 +79,19 @@ Phase 3: Real Prefetch Evaluation, System Ablations, Virtual NVMe Baseline, and 
   - `prefetch_summary.csv`
   - `system_ablations_summary.csv`
 - **Documentation Authored**:
+  - `docs/v2/P3_LIVE_PREFETCH_INTEGRATION.md`
+  - `docs/v2/P3_REAL_INFERENCE_PREFETCH.md`
   - `docs/v2/P3_PHASE3_RESULTS.md`
   - `docs/v2/STATUS.md`
   - `docs/v2/DECISIONS.md`
 - **Tests**:
-  - 27/27 tests passing across unit and integration suites (`pytest person3_system/tests/ tests/test_end_to_end_real_pipeline.py tests/test_phase3_eval.py -v`).
+  - 38/38 tests passing across unit and integration suites (`pytest person3_system/tests/ tests/test_end_to_end_real_pipeline.py tests/test_phase3_eval.py tests/test_inference_prefetch_adapter.py -v`).
 
 ---
 
 ## Working On
 
-Ready for final project review and cross-agent dashboard integration.
+Ready for final live inference integration with P1.
 
 ---
 
@@ -108,13 +104,14 @@ None.
 ## Dependencies
 
 - P1 Real Qwen trace: `/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.jsonl` (consumed).
-- P2 Deterministic Tensor Mapper & Virtual NVMe: integrated and verified.
+- P2 Deterministic Tensor Mapper & RealInferenceStorageBackend: integrated and verified.
 
 ---
 
 ## Tests
 
-27 passing tests:
+38 passing tests:
+- `tests/test_inference_prefetch_adapter.py` (11 tests, 100% pass)
 - `tests/test_phase3_eval.py` (1 test, 100% pass)
 - `tests/test_end_to_end_real_pipeline.py` (2 tests, 100% pass)
 - `person3_system/tests/test_storage_backend.py` (5 tests)

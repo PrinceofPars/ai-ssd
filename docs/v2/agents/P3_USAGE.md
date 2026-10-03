@@ -13,16 +13,16 @@ SYSTEM INTEGRATION / STORAGE API / PREFETCH / EXPERIMENTS
 # Current Session
 
 Session:
-S05-V2-PHASE5C-INFERENCE-ADAPTER
+S06-V2-LIVE-PREFETCH-INTEGRATION
 
 Started:
-2026-10-03T02:00:00+05:30
+2026-10-03T11:30:00+05:30
 
 Last Refresh:
-2026-10-03T02:30:00+05:30
+2026-10-03T11:55:00+05:30
 
 Current State:
-PHASE 5C COMPLETE & VERIFIED
+LIVE PREFETCH INTEGRATION PREPARATION COMPLETE & VERIFIED
 
 ---
 
@@ -56,15 +56,6 @@ PHASE 5C COMPLETE & VERIFIED
 - Authored comprehensive Phase 3 report: `docs/v2/P3_PHASE3_RESULTS.md`.
 - Verified 27/27 tests passing.
 
-Files Changed:
-- `benchmarks/run_phase3_eval.py` (new)
-- `tests/test_phase3_eval.py` (new)
-- `docs/v2/P3_PHASE3_RESULTS.md` (new)
-- `docs/v2/DECISIONS.md`
-- `docs/v2/STATUS.md`
-- `docs/v2/agents/P3_STATUS.md`
-- `docs/v2/agents/P3_USAGE.md`
-
 ## Session 005 (Phase 5C: Real Inference Prefetch Adapter)
 - Implemented `RealInferencePrefetchAdapter` in `person3_system/prefetch/inference_adapter.py`.
 - Re-exported in `person3_system/prefetch/__init__.py`.
@@ -76,10 +67,18 @@ Files Changed:
 - Tested and verified: 10/10 new tests passing in `tests/test_inference_prefetch_adapter.py` (37/37 P3 tests total).
 - Authored comprehensive documentation in `docs/v2/P3_REAL_INFERENCE_PREFETCH.md`.
 
+## Session 006 (Live Inference Prefetch Integration Preparation)
+- Audited P1's live inference loop (`aissd_inference.py`) and P2's backend (`RealInferenceStorageBackend`).
+- Extended `RealInferencePrefetchAdapter` to fully wrap P2's `RealInferenceStorageBackend` while preserving exact tensor shapes (`[16, 2, 64]` / `[1, 16, 64]`), dtypes, and numerical values.
+- Implemented direct compatibility methods: `write_block`, `read_key_page`, `read_value_page`, `read_block`, `read`, `prefetch`, `prefetch_blocks`, `predict_and_prefetch`, `record_hit`, `record_miss`, `contains_block`, `evict_block`, `get_telemetry`, `reset_stats`.
+- Ensured prefetched data is NOT metadata-only: extracted and stored real NumPy arrays and raw bytes in host DRAM staging buffer (`StagedInferenceBlock`).
+- Verified round-trip data equality between write, prefetch, and demand read.
+- Added comprehensive integration tests in `tests/test_inference_prefetch_adapter.py` (11/11 passed, 38/38 P3 tests total).
+- Authored `docs/v2/P3_LIVE_PREFETCH_INTEGRATION.md` detailing API specifications, P2 backend expectations, data-flow diagram, telemetry definitions, prediction policy live viability analysis, and remaining blockers.
+
 Files Changed:
-- `person3_system/prefetch/inference_adapter.py` (new)
-- `person3_system/prefetch/__init__.py`
-- `tests/test_inference_prefetch_adapter.py` (new)
-- `docs/v2/P3_REAL_INFERENCE_PREFETCH.md` (new)
+- `person3_system/prefetch/inference_adapter.py`
+- `tests/test_inference_prefetch_adapter.py`
+- `docs/v2/P3_LIVE_PREFETCH_INTEGRATION.md` (new)
 - `docs/v2/agents/P3_STATUS.md`
 - `docs/v2/agents/P3_USAGE.md`
