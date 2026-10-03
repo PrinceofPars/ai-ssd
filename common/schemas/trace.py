@@ -68,6 +68,10 @@ class CanonicalTraceRecord:
         return self.byte_size
 
     @property
+    def timestamp_us(self) -> float:
+        return self.timestamp_ns / 1000.0
+
+    @property
     def block_ids(self) -> List[int]:
         if self.selected_blocks:
             return self.selected_blocks
