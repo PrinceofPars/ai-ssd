@@ -341,8 +341,9 @@ def test_file_storage_backend_interoperability():
         tmp_path = f.name
 
     try:
-        backend = FileStorageBackend(filepath=tmp_path, block_size=LOGICAL_BLOCK_BYTES)
-        adapter = RealInferencePrefetchAdapter(storage_backend=backend)
+        block_bytes = 16384
+        backend = FileStorageBackend(filepath=tmp_path, block_size=block_bytes)
+        adapter = RealInferencePrefetchAdapter(storage_backend=backend, bytes_per_block=block_bytes)
 
         k_arr = np.ones((16, 2, 64), dtype=np.float32) * 5.5
         v_arr = np.ones((16, 2, 64), dtype=np.float32) * 6.6

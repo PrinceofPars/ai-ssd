@@ -80,6 +80,7 @@ class RealInferenceStorageBackend:
         # Storage mode: "file" (true offload temp file) or "nvme_qemu" (QEMU NVMe guest controller)
         storage_mode: str = "file",
         nvme_raw_path: str = "/opt/ai-ssd-v2/images/v2_nvme.raw",
+        enable_batching: bool = True,
         # Analytical NAND timing parameters (MLC baseline):
         t_r_us: float = 35.0,
         t_prog_us: float = 350.0,
@@ -98,6 +99,7 @@ class RealInferenceStorageBackend:
         self.mapping_mode = mapping_mode
         self.storage_mode = storage_mode
         self.nvme_raw_path = nvme_raw_path
+        self.enable_batching = enable_batching
 
         # Timing parameters for analytical metrics
         self.t_r_us = t_r_us
@@ -545,6 +547,9 @@ class RealInferenceStorageBackend:
         if not block_ids:
             return {}
 
+        if not self.enable_batching:
+            return {bid: self.read_key_page(layer_idx, bid, head_id, token_start) for bid in block_ids}
+
         results: Dict[int, np.ndarray] = {}
         total_bytes = 0
 
@@ -623,6 +628,9 @@ class RealInferenceStorageBackend:
         """
         if not block_ids:
             return {}
+
+        if not self.enable_batching:
+            return {bid: self.read_value_page(layer_idx, bid, head_id, token_start) for bid in block_ids}
 
         results: Dict[int, np.ndarray] = {}
         total_bytes = 0
@@ -703,6 +711,9 @@ class RealInferenceStorageBackend:
         """
         if not block_ids:
             return {}
+
+        if not self.enable_batching:
+            return {bid: self.read_block(layer_idx, bid, head_id, token_start) for bid in block_ids}
 
         results: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
         total_bytes = 0
@@ -900,6 +911,8 @@ class RealInferenceStorageBackend:
         self.storage_batches = 0
         self.batched_requests = 0
         self._access_log.clear()
+        if getattr(self, "_nvme_client", None) is not None:
+            self._nvme_client.reset_stats()
 
     def reset_telemetry(self) -> None:
         """Alias for reset_stats."""

@@ -1,9 +1,9 @@
 {
   "evaluation_title": "AI-SSD V2 Phase 3: Real Prefetch & End-to-End System Evaluation",
-  "timestamp_utc": "2026-10-03T11:07:38.122775Z",
+  "timestamp_utc": "2026-10-03T21:17:26.527608Z",
   "provenance": {
     "environment": {
-      "git_commit": "32dad1aa2246f0ab2b960560fb9f2a5f2f4e99fc",
+      "git_commit": "c82797dbd358d99a0bb1af9b77a4fa14e511787b",
       "git_branch": "v2-real-llm-kvssd",
       "hostname": "ip-172-31-27-77",
       "cpu_model": "Intel(R) Xeon(R) Platinum 8488C",
@@ -19,7 +19,7 @@
         "pandas": "not_installed",
         "yaml": "6.0.3"
       },
-      "timestamp": "2026-10-03T11:07:37.929297Z"
+      "timestamp": "2026-10-03T21:17:26.234594Z"
     },
     "trace": {
       "file_path": "/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.jsonl",
@@ -278,8 +278,8 @@
   "virtual_nvme_storage": {
     "classification": "VIRTUAL-DEVICE",
     "device_image": "/opt/ai-ssd-v2/images/v2_nvme.raw",
-    "device_size_bytes": 1073741824,
-    "raw_block_read_latency_us": 10.29,
+    "device_size_bytes": 4294967296,
+    "raw_block_read_latency_us": 20.43,
     "file_backend_verified": true,
     "qemu_guest_benchmarks": {
       "seq_read_64k": {
@@ -287,60 +287,60 @@
         "classification": "VIRTUAL-DEVICE",
         "io_type": "read",
         "block_size": "64k",
-        "iops": 25587.5,
-        "bandwidth_mbs": 1599.22,
-        "avg_latency_us": 155.7,
-        "p99_latency_us": 189.44,
-        "cpu_usr_pct": 3.333333,
-        "cpu_sys_pct": 95.833333
+        "iops": 21956.7,
+        "bandwidth_mbs": 1372.29,
+        "avg_latency_us": 181.3,
+        "p99_latency_us": 362.5,
+        "cpu_usr_pct": 5.2,
+        "cpu_sys_pct": 90.966667
       },
       "seq_write_64k": {
         "benchmark": "seq_write_64k",
         "classification": "VIRTUAL-DEVICE",
         "io_type": "write",
         "block_size": "64k",
-        "iops": 19622.8,
-        "bandwidth_mbs": 1226.42,
-        "avg_latency_us": 203.04,
-        "p99_latency_us": 329.73,
-        "cpu_usr_pct": 17.9,
-        "cpu_sys_pct": 77.266667
+        "iops": 20428.2,
+        "bandwidth_mbs": 1276.76,
+        "avg_latency_us": 194.82,
+        "p99_latency_us": 276.48,
+        "cpu_usr_pct": 15.133333,
+        "cpu_sys_pct": 82.0
       },
       "rand_read_4k": {
         "benchmark": "rand_read_4k",
         "classification": "VIRTUAL-DEVICE",
         "io_type": "read",
         "block_size": "4k",
-        "iops": 22914.7,
-        "bandwidth_mbs": 89.51,
-        "avg_latency_us": 348.39,
-        "p99_latency_us": 387.07,
-        "cpu_usr_pct": 4.666667,
-        "cpu_sys_pct": 95.066667
+        "iops": 24374.9,
+        "bandwidth_mbs": 95.21,
+        "avg_latency_us": 327.24,
+        "p99_latency_us": 370.69,
+        "cpu_usr_pct": 5.3,
+        "cpu_sys_pct": 94.4
       },
       "rand_write_4k": {
         "benchmark": "rand_write_4k",
         "classification": "VIRTUAL-DEVICE",
         "io_type": "write",
         "block_size": "4k",
-        "iops": 22688.8,
-        "bandwidth_mbs": 88.63,
-        "avg_latency_us": 351.81,
-        "p99_latency_us": 387.07,
-        "cpu_usr_pct": 4.233333,
-        "cpu_sys_pct": 95.7
+        "iops": 24203.3,
+        "bandwidth_mbs": 94.54,
+        "avg_latency_us": 329.65,
+        "p99_latency_us": 403.46,
+        "cpu_usr_pct": 4.866667,
+        "cpu_sys_pct": 92.366667
       },
       "rand_read_8k": {
         "benchmark": "rand_read_8k",
         "classification": "VIRTUAL-DEVICE",
         "io_type": "read",
         "block_size": "8k",
-        "iops": 22339.2,
-        "bandwidth_mbs": 174.53,
-        "avg_latency_us": 357.28,
-        "p99_latency_us": 387.07,
-        "cpu_usr_pct": 4.766667,
-        "cpu_sys_pct": 95.166667
+        "iops": 25899.4,
+        "bandwidth_mbs": 202.34,
+        "avg_latency_us": 307.9,
+        "p99_latency_us": 358.4,
+        "cpu_usr_pct": 5.566667,
+        "cpu_sys_pct": 93.433333
       }
     }
   },

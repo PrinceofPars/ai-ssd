@@ -215,6 +215,7 @@ def create_default_storage_backend(
     enable_prefetch: bool = True,
     buffer_capacity_blocks: int = 512,
     storage_mode: str = "file",
+    enable_batching: bool = True,
 ) -> Any:
     """Creates the production AI-SSD storage backend pipeline.
     
@@ -235,6 +236,7 @@ def create_default_storage_backend(
             dtype=dtype,
             mapping_mode=mapping_mode,
             storage_mode=storage_mode,
+            enable_batching=enable_batching,
         )
     else:
         backend = AISSDBlockStorageBackend(
@@ -289,6 +291,20 @@ class AISSDKVManager:
         self.is_active = False
         self.layer_data: Dict[int, Dict[str, Any]] = {}
         self.kernel = get_native_c_kernel()
+        self.timings = {
+            "candidate_k_reads_s": 0.0,
+            "topk_scoring_s": 0.0,
+            "candidate_selection_s": 0.0,
+            "prefetch_s": 0.0,
+            "winning_v_reads_s": 0.0,
+            "tensor_recon_s": 0.0,
+            "active_concat_s": 0.0,
+        }
+
+    def reset_timings(self) -> None:
+        """Resets all sub-operation timings to zero."""
+        for k in self.timings:
+            self.timings[k] = 0.0
 
     def init_from_prefill(self, past_key_values: Any) -> None:
         """Blockizes the prefill KV cache and offloads historical blocks to storage backend."""
@@ -391,6 +407,7 @@ class AISSDKVManager:
             act_tokens_list = [actual_tokens for _, actual_tokens in cand_bids]
 
             # Optimization C: Batch candidate Key page reads from storage
+            t_k_start = time.perf_counter()
             if hasattr(self.backend, "read_key_page_batch"):
                 loaded_k_pages = self.backend.read_key_page_batch(l_idx, cand_ids)
                 k_blocks_list = [loaded_k_pages[bid] for bid in cand_ids]
@@ -401,7 +418,9 @@ class AISSDKVManager:
                     k_blk = self.backend.read_key_page(l_idx, bid)
                     loaded_k_pages[bid] = k_blk
                     k_blocks_list.append(k_blk)
+            self.timings["candidate_k_reads_s"] += time.perf_counter() - t_k_start
 
+            t_score_start = time.perf_counter()
             if self.kernel.is_available() and hasattr(self.kernel._lib, "instorage_topk_filter_gqa_avx2"):
                 top_indices, top_scores = self.kernel.compute_topk_gqa(
                     query=q_np,
@@ -412,7 +431,11 @@ class AISSDKVManager:
                     kv_heads=k_blocks_list[0].shape[1],
                     head_dim=self.head_dim,
                 )
+                self.timings["topk_scoring_s"] += time.perf_counter() - t_score_start
+
+                t_sel_start = time.perf_counter()
                 top_bids = [(float(top_scores[i]), cand_bids[idx][0], cand_bids[idx][1]) for i, idx in enumerate(top_indices)]
+                self.timings["candidate_selection_s"] += time.perf_counter() - t_sel_start
             else:
                 scores = []
                 for bid, actual_tokens in cand_bids:
@@ -420,23 +443,32 @@ class AISSDKVManager:
                     dots = np.einsum("hd,thd->th", q_np, k_blk[:, [h // 7 for h in range(14)], :]) * scale
                     max_score = float(np.max(dots[:actual_tokens]))
                     scores.append((max_score, bid, actual_tokens))
+                self.timings["topk_scoring_s"] += time.perf_counter() - t_score_start
+
+                t_sel_start = time.perf_counter()
                 scores.sort(key=lambda x: x[0], reverse=True)
                 top_bids = scores[:k_val]
+                self.timings["candidate_selection_s"] += time.perf_counter() - t_sel_start
 
             # Inter-layer speculative prefetch for Layer L+1:
+            t_pref_start = time.perf_counter()
             if hasattr(self.backend, "predict_and_prefetch") and cand_bids:
                 winning_bids = [bid for _, bid, _ in top_bids]
                 self.backend.predict_and_prefetch(current_layer_id=l_idx, current_block_ids=winning_bids)
+            self.timings["prefetch_s"] += time.perf_counter() - t_pref_start
 
             # 2. Host retrieves winning blocks over PCIe (TOPK_FETCH)
             # Optimization C: Batch winning Value page reads from storage
+            t_v_start = time.perf_counter()
             win_bids = [bid for _, bid, _ in top_bids]
             if hasattr(self.backend, "read_value_page_batch"):
                 loaded_v_pages = self.backend.read_value_page_batch(l_idx, win_bids)
             else:
                 loaded_v_pages = {bid: self.backend.read_value_page(l_idx, bid) for bid in win_bids}
+            self.timings["winning_v_reads_s"] += time.perf_counter() - t_v_start
 
             # Optimization B: Reuse Key pages already loaded during scoring, eliminating duplicate reads
+            t_rec_start = time.perf_counter()
             for _, bid, actual_tokens in top_bids:
                 v_blk = loaded_v_pages[bid]
                 k_blk = loaded_k_pages[bid]
@@ -446,13 +478,16 @@ class AISSDKVManager:
                 v_t = torch.from_numpy(v_blk[:actual_tokens]).to(dtype=target_dtype, device=target_device).permute(1, 0, 2).unsqueeze(0)
                 selected_k_blocks.append(k_t)
                 selected_v_blocks.append(v_t)
+            self.timings["tensor_recon_s"] += time.perf_counter() - t_rec_start
 
         # 3. Concatenate active working set: Sinks + Top-k + Recent Window
+        t_cat_start = time.perf_counter()
         parts_k = [ld["sink_k"]] + selected_k_blocks + [ld["recent_k"]]
         parts_v = [ld["sink_v"]] + selected_v_blocks + [ld["recent_v"]]
 
         active_k = torch.cat(parts_k, dim=2)
         active_v = torch.cat(parts_v, dim=2)
+        self.timings["active_concat_s"] += time.perf_counter() - t_cat_start
         return active_k, active_v
 
     def get_memory_stats(self) -> Dict[str, Any]:
@@ -587,6 +622,16 @@ def run_aissd_decode(
 
     kv_mgr = AISSDKVManager(backend, top_k_pct=top_k_pct)
 
+    model_timings = {
+        "qkv_proj_s": 0.0,
+        "rope_s": 0.0,
+        "attn_matmul_s": 0.0,
+        "out_proj_s": 0.0,
+        "mlp_and_norm_s": 0.0,
+        "bookkeeping_s": 0.0,
+    }
+    attn_forward_durations: List[float] = []
+
     # Wrap layer attention forward passes
     orig_forwards = {}
     for i, layer in enumerate(model.model.layers):
@@ -598,10 +643,12 @@ def run_aissd_decode(
                 if not kv_mgr.is_active or hidden_states.shape[1] > 1:
                     return original_fwd(hidden_states, position_embeddings, attention_mask=attention_mask, past_key_values=past_key_values, **kwargs)
 
+                t_attn_fwd_start = time.perf_counter()
                 attn_module = model.model.layers[layer_idx].self_attn
                 input_shape = hidden_states.shape[:-1]
                 hidden_shape = (*input_shape, -1, attn_module.head_dim)
 
+                t_qkv = time.perf_counter()
                 q_raw = attn_module.q_proj(hidden_states).view(hidden_shape)
                 k_raw = attn_module.k_proj(hidden_states).view(hidden_shape)
                 if hasattr(attn_module, "q_norm"):
@@ -612,15 +659,19 @@ def run_aissd_decode(
                 q = q_raw.transpose(1, 2)
                 k = k_raw.transpose(1, 2)
                 v = attn_module.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+                model_timings["qkv_proj_s"] += time.perf_counter() - t_qkv
 
+                t_rope = time.perf_counter()
                 cos, sin = position_embeddings
                 q, k = apply_rotary_pos_emb(q, k, cos, sin)
+                model_timings["rope_s"] += time.perf_counter() - t_rope
 
                 # Execute genuine AI-SSD path
                 kv_mgr.append_new_token(layer_idx, k, v)
                 act_k, act_v = kv_mgr.select_and_fetch_active_kv(layer_idx, q)
 
                 # Attention computation on retrieved blocks
+                t_attn = time.perf_counter()
                 q_heads = attn_module.config.num_attention_heads
                 kv_heads = attn_module.config.num_key_value_heads
                 gqa = q_heads // kv_heads
@@ -634,13 +685,20 @@ def run_aissd_decode(
 
                 out = torch.matmul(weights, v_exp)
                 out = out.transpose(1, 2).reshape(*input_shape, -1).contiguous()
+                model_timings["attn_matmul_s"] += time.perf_counter() - t_attn
+
+                t_out = time.perf_counter()
                 out = attn_module.o_proj(out)
+                model_timings["out_proj_s"] += time.perf_counter() - t_out
+
+                attn_forward_durations.append(time.perf_counter() - t_attn_fwd_start)
                 return out, None
 
             return forward
 
         attn.forward = make_aissd_forward(i, orig_forwards[i])
 
+    total_model_forward_s = 0.0
     try:
         # 1. Prefill step
         with torch.no_grad():
@@ -648,8 +706,12 @@ def run_aissd_decode(
         pkv_prefill = prefill_out.past_key_values
         kv_mgr.init_from_prefill(pkv_prefill)
 
-        # Reset backend counters to measure only decode traffic
+        # Reset backend counters and KV manager timers to measure strictly decode traffic
         backend.reset_stats()
+        kv_mgr.reset_timings()
+        for k in model_timings:
+            model_timings[k] = 0.0
+        attn_forward_durations.clear()
 
         next_token = torch.argmax(prefill_out.logits[:, -1, :], dim=-1, keepdim=True)
         generated_tokens = [next_token.item()]
@@ -666,12 +728,20 @@ def run_aissd_decode(
         sampler.start()
         t_start = time.perf_counter()
         for step in range(1, decode_tokens):
+            t_bk = time.perf_counter()
             pos_ids = torch.tensor([[cur_seq_len + step - 1]], device=input_ids.device)
+            model_timings["bookkeeping_s"] += time.perf_counter() - t_bk
+
+            t_step = time.perf_counter()
             with torch.no_grad():
                 step_out = model(input_ids=next_token, position_ids=pos_ids, use_cache=False)
+            total_model_forward_s += time.perf_counter() - t_step
+
+            t_bk = time.perf_counter()
             next_token = torch.argmax(step_out.logits[:, -1, :], dim=-1, keepdim=True)
             generated_tokens.append(next_token.item())
             step_logits.append(step_out.logits[:, -1, :].clone())
+            model_timings["bookkeeping_s"] += time.perf_counter() - t_bk
         t_end = time.perf_counter()
         proc_mem = sampler.stop()
 
@@ -684,6 +754,10 @@ def run_aissd_decode(
     tps = len(generated_tokens) / max(1e-6, wall_time)
     mem_stats = kv_mgr.get_memory_stats()
 
+    # Calculate MLP and LayerNorm time as remaining model forward duration
+    total_attn_fwd_s = sum(attn_forward_durations)
+    model_timings["mlp_and_norm_s"] = max(0.0, total_model_forward_s - total_attn_fwd_s)
+
     if hasattr(backend, "buffer_capacity_blocks") or "Prefetch" in backend.__class__.__name__:
         storage_backend_name = "P1 -> P3 (DRAM Staging + Speculative Prefetch) -> P2 (Multi-Channel Flash FTL)"
     elif getattr(backend, "CLASSIFICATION", None) == "ANALYTICAL":
@@ -692,6 +766,33 @@ def run_aissd_decode(
         storage_backend_name = "AI-SSD BlockStore (Controller Flash Buffer + PCIe Fetch)"
 
     generated_text = tokenizer.decode(generated_tokens)
+
+    # Compile unified timing breakdown across all measured components
+    timing_breakdown = {
+        "qkv_proj_s": round(model_timings["qkv_proj_s"], 4),
+        "rope_s": round(model_timings["rope_s"], 4),
+        "candidate_k_reads_s": round(kv_mgr.timings["candidate_k_reads_s"], 4),
+        "topk_scoring_s": round(kv_mgr.timings["topk_scoring_s"], 4),
+        "candidate_selection_s": round(kv_mgr.timings["candidate_selection_s"], 4),
+        "prefetch_s": round(kv_mgr.timings["prefetch_s"], 4),
+        "winning_v_reads_s": round(kv_mgr.timings["winning_v_reads_s"], 4),
+        "tensor_recon_s": round(kv_mgr.timings["tensor_recon_s"], 4),
+        "active_concat_s": round(kv_mgr.timings["active_concat_s"], 4),
+        "attn_matmul_s": round(model_timings["attn_matmul_s"], 4),
+        "out_proj_s": round(model_timings["out_proj_s"], 4),
+        "mlp_and_norm_s": round(model_timings["mlp_and_norm_s"], 4),
+        "bookkeeping_s": round(model_timings["bookkeeping_s"], 4),
+        "total_measured_s": round(
+            model_timings["qkv_proj_s"] + model_timings["rope_s"] +
+            kv_mgr.timings["candidate_k_reads_s"] + kv_mgr.timings["topk_scoring_s"] +
+            kv_mgr.timings["candidate_selection_s"] + kv_mgr.timings["prefetch_s"] +
+            kv_mgr.timings["winning_v_reads_s"] + kv_mgr.timings["tensor_recon_s"] +
+            kv_mgr.timings["active_concat_s"] + model_timings["attn_matmul_s"] +
+            model_timings["out_proj_s"] + model_timings["mlp_and_norm_s"] +
+            model_timings["bookkeeping_s"], 4
+        ),
+        "wall_time_s": round(wall_time, 4),
+    }
 
     result = {
         "mode": "AI-SSD",
@@ -715,6 +816,7 @@ def run_aissd_decode(
         "token_ids": generated_tokens,
         "generated_text": generated_text,
         "final_logits": step_logits[-1].cpu().numpy(),
+        "timing_breakdown": timing_breakdown,
     }
 
     if hasattr(backend, "get_telemetry"):
@@ -723,5 +825,9 @@ def run_aissd_decode(
         if "storage_backend" in telem:
             result["storage_telemetry"] = telem["storage_backend"]
             result["prefetch_telemetry"] = {k: v for k, v in telem.items() if k != "storage_backend"}
+        if "nvme_telemetry" in telem:
+            result["nvme_telemetry"] = telem["nvme_telemetry"]
+        elif "storage_backend" in telem and "nvme_telemetry" in telem["storage_backend"]:
+            result["nvme_telemetry"] = telem["storage_backend"]["nvme_telemetry"]
 
     return result

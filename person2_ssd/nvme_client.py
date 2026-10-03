@@ -47,6 +47,12 @@ class QemuNvmeClient:
         self.write_ops: int = 0
         self.total_read_time_s: float = 0.0
         self.total_write_time_s: float = 0.0
+        self.total_pack_time_s: float = 0.0
+        self.total_send_time_s: float = 0.0
+        self.total_wait_time_s: float = 0.0
+        self.total_recv_time_s: float = 0.0
+        self.batch_count: int = 0
+        self.batch_sizes: List[int] = []
 
     def start_qemu(self, raw_img: str = RAW_IMG, timeout_s: float = 20.0) -> None:
         """Starts QEMU with KVM and the virtual NVMe device, waiting for the guest daemon."""
@@ -160,19 +166,29 @@ class QemuNvmeClient:
         if self.sock is None:
             self.connect()
         req = struct.pack("<IBBHQI", MAGIC, OP_READ, 0, 0, offset, length)
-        t0 = time.perf_counter()
+        t_send = time.perf_counter()
         self.sock.sendall(req)
+        send_elapsed = time.perf_counter() - t_send
+
+        t_wait = time.perf_counter()
         resp = self._recv_exact(HEADER_SIZE)
+        wait_elapsed = time.perf_counter() - t_wait
+
         magic, status, op, _, resp_offset, data_len = struct.unpack("<IBBHQI", resp)
         if magic != MAGIC or status != 0:
             raise IOError(f"NVMe read failed at offset {offset}, length {length}, status {status}")
 
+        t_recv = time.perf_counter()
         data = self._recv_exact(data_len)
-        elapsed = time.perf_counter() - t0
+        recv_elapsed = time.perf_counter() - t_recv
 
+        total_elapsed = send_elapsed + wait_elapsed + recv_elapsed
         self.read_ops += 1
         self.total_read_bytes += data_len
-        self.total_read_time_s += elapsed
+        self.total_read_time_s += total_elapsed
+        self.total_send_time_s += send_elapsed
+        self.total_wait_time_s += wait_elapsed
+        self.total_recv_time_s += recv_elapsed
         return data
 
     def read_batch(self, requests: List[Tuple[int, int, int]]) -> Dict[int, bytes]:
@@ -188,6 +204,7 @@ class QemuNvmeClient:
         if self.sock is None:
             self.connect()
 
+        t_pack = time.perf_counter()
         num_items = len(requests)
         req_hdr = struct.pack("<IBBHQI", MAGIC, OP_BATCH_READ, 0, 0, 0, num_items)
         items_payload = bytearray()
@@ -195,14 +212,21 @@ class QemuNvmeClient:
         for offset, length, bid in requests:
             items_payload.extend(struct.pack("<QII", offset, length, bid))
             total_req_bytes += length
+        pack_elapsed = time.perf_counter() - t_pack
 
-        t0 = time.perf_counter()
+        t_send = time.perf_counter()
         self.sock.sendall(req_hdr + items_payload)
+        send_elapsed = time.perf_counter() - t_send
+
+        t_wait = time.perf_counter()
         resp = self._recv_exact(HEADER_SIZE)
+        wait_elapsed = time.perf_counter() - t_wait
+
         magic, status, op, _, _, resp_items = struct.unpack("<IBBHQI", resp)
         if magic != MAGIC or status != 0:
             raise IOError(f"NVMe batch read failed, status {status}")
 
+        t_recv = time.perf_counter()
         results: Dict[int, bytes] = {}
         for _ in range(resp_items):
             item_hdr = self._recv_exact(9)
@@ -211,11 +235,18 @@ class QemuNvmeClient:
                 raise IOError(f"NVMe batch read item failed for block {bid}")
             data = self._recv_exact(item_len)
             results[bid] = data
+        recv_elapsed = time.perf_counter() - t_recv
 
-        elapsed = time.perf_counter() - t0
+        total_elapsed = pack_elapsed + send_elapsed + wait_elapsed + recv_elapsed
         self.read_ops += num_items
         self.total_read_bytes += total_req_bytes
-        self.total_read_time_s += elapsed
+        self.total_read_time_s += total_elapsed
+        self.total_pack_time_s += pack_elapsed
+        self.total_send_time_s += send_elapsed
+        self.total_wait_time_s += wait_elapsed
+        self.total_recv_time_s += recv_elapsed
+        self.batch_count += 1
+        self.batch_sizes.append(num_items)
         return results
 
     def flush(self) -> None:
@@ -243,6 +274,21 @@ class QemuNvmeClient:
                 self._qemu_proc.kill()
             self._qemu_proc = None
 
+    def reset_stats(self) -> None:
+        """Resets all metrics and protocol timers to zero."""
+        self.total_read_bytes = 0
+        self.total_write_bytes = 0
+        self.read_ops = 0
+        self.write_ops = 0
+        self.total_read_time_s = 0.0
+        self.total_write_time_s = 0.0
+        self.total_pack_time_s = 0.0
+        self.total_send_time_s = 0.0
+        self.total_wait_time_s = 0.0
+        self.total_recv_time_s = 0.0
+        self.batch_count = 0
+        self.batch_sizes.clear()
+
     def get_telemetry(self) -> Dict[str, Any]:
         """Returns hardware-level NVMe driver I/O telemetry."""
         avg_r_lat_us = (self.total_read_time_s / self.read_ops * 1e6) if self.read_ops > 0 else 0.0
@@ -262,6 +308,14 @@ class QemuNvmeClient:
             "avg_write_latency_us": round(avg_w_lat_us, 2),
             "total_storage_time_s": round(total_time_s, 4),
             "storage_throughput_mbs": round(throughput_mbs, 2),
+            "total_pack_time_s": round(self.total_pack_time_s, 4),
+            "total_send_time_s": round(self.total_send_time_s, 4),
+            "total_wait_time_s": round(self.total_wait_time_s, 4),
+            "total_recv_time_s": round(self.total_recv_time_s, 4),
+            "batch_count": self.batch_count,
+            "min_batch_size": min(self.batch_sizes) if self.batch_sizes else 0,
+            "max_batch_size": max(self.batch_sizes) if self.batch_sizes else 0,
+            "avg_batch_size": round(sum(self.batch_sizes) / len(self.batch_sizes), 2) if self.batch_sizes else 0.0,
         }
 
     def __del__(self):

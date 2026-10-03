@@ -420,13 +420,13 @@ class RealInferencePrefetchAdapter:
                 )
                 raw_bytes = res.data or b"\x00" * self.bytes_per_block
                 half = len(raw_bytes) // 2
-                k_tensor = np.frombuffer(raw_bytes[:half], dtype=self.np_dtype)
-                v_tensor = np.frombuffer(raw_bytes[half:], dtype=self.np_dtype)
+                k_tensor = np.frombuffer(raw_bytes[:half], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
+                v_tensor = np.frombuffer(raw_bytes[half:], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
             else:
                 raw_bytes = b"\x00" * self.bytes_per_block
                 half = len(raw_bytes) // 2
-                k_tensor = np.frombuffer(raw_bytes[:half], dtype=self.np_dtype)
-                v_tensor = np.frombuffer(raw_bytes[half:], dtype=self.np_dtype)
+                k_tensor = np.frombuffer(raw_bytes[:half], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
+                v_tensor = np.frombuffer(raw_bytes[half:], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
 
             entry = StagedInferenceBlock(
                 block_id=bid,
@@ -655,8 +655,8 @@ class RealInferencePrefetchAdapter:
             if entry.data_k is not None and entry.data_v is not None:
                 return entry.data_k, entry.data_v
             raw = entry.data or b"\x00" * self.bytes_per_block
-            k_ret = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype)
-            v_ret = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype)
+            k_ret = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
+            v_ret = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
             return k_ret, v_ret
 
         # Demand Miss
@@ -681,8 +681,8 @@ class RealInferencePrefetchAdapter:
                 sub_page="BOTH",
             )
             raw = res.data or b"\x00" * self.bytes_per_block
-            k_tensor = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype)
-            v_tensor = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype)
+            k_tensor = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
+            v_tensor = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
         else:
             k_tensor = np.zeros((self.tokens_per_block, self.kv_heads_per_block, self.head_dim), dtype=self.np_dtype)
             v_tensor = np.zeros((self.tokens_per_block, self.kv_heads_per_block, self.head_dim), dtype=self.np_dtype)
@@ -922,8 +922,8 @@ class RealInferencePrefetchAdapter:
                     results[bid] = (entry.data_k, entry.data_v)
                 else:
                     raw = entry.data or b"\x00" * self.bytes_per_block
-                    k_ret = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype)
-                    v_ret = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype)
+                    k_ret = np.frombuffer(raw[:KEY_PAGE_BYTES], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
+                    v_ret = np.frombuffer(raw[KEY_PAGE_BYTES:KEY_PAGE_BYTES + VALUE_PAGE_BYTES], dtype=self.np_dtype).reshape((self.tokens_per_block, self.kv_heads_per_block, self.head_dim))
                     results[bid] = (k_ret, v_ret)
             else:
                 miss_bids.append(bid)

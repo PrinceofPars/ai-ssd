@@ -56,6 +56,11 @@ def run_worker():
     parser.add_argument("--mode", type=str, required=True, choices=["baseline", "aissd"])
     parser.add_argument("--storage-mode", type=str, default="file", choices=["file", "nvme_qemu"])
     parser.add_argument("--mapping-mode", type=str, default="tensor_aware", choices=["tensor_aware", "conventional"])
+    parser.add_argument("--enable-prefetch", action="store_true", default=True, dest="enable_prefetch")
+    parser.add_argument("--disable-prefetch", action="store_false", dest="enable_prefetch")
+    parser.add_argument("--enable-batching", action="store_true", default=True, dest="enable_batching")
+    parser.add_argument("--disable-batching", action="store_false", dest="enable_batching")
+    parser.add_argument("--top-k-pct", type=float, default=10.0)
     parser.add_argument("--context", type=int, required=True)
     parser.add_argument("--rep", type=int, default=0)
     parser.add_argument("--decode", type=int, default=16)
@@ -138,13 +143,14 @@ def run_worker():
 
         backend = create_default_storage_backend(
             channels=8,
-            enable_prefetch=True,
+            enable_prefetch=args.enable_prefetch,
             num_layers=num_layers,
             num_heads=num_kv_heads,
             head_dim=head_dim,
             dtype="float32",
             mapping_mode=args.mapping_mode,
             storage_mode=args.storage_mode,
+            enable_batching=args.enable_batching,
         )
 
         storage = getattr(backend, "storage_backend", backend)
@@ -157,9 +163,9 @@ def run_worker():
                 tokenizer=engine.tokenizer,
                 input_ids=input_ids,
                 decode_tokens=args.decode,
-                top_k_pct=10.0,
+                top_k_pct=args.top_k_pct,
                 storage_backend=backend,
-                enable_prefetch=True,
+                enable_prefetch=args.enable_prefetch,
                 seed=effective_seed,
             )
             total_time = time.perf_counter() - t0
@@ -195,6 +201,9 @@ def run_worker():
                 "mode": "AI-SSD",
                 "storage_mode": args.storage_mode,
                 "mapping_mode": args.mapping_mode,
+                "enable_prefetch": args.enable_prefetch,
+                "enable_batching": args.enable_batching,
+                "top_k_pct": args.top_k_pct,
                 "backend_classification": getattr(storage, "CLASSIFICATION", "UNKNOWN"),
                 "context_length": args.context,
                 "actual_tokens": actual_tokens,
@@ -225,7 +234,8 @@ def run_worker():
                 "staging_mb": staging_bytes / (1024.0 * 1024.0),
                 "p2_metadata_bytes": p2_meta_bytes,
                 "channel_distribution": storage_telemetry.get("channel_distribution", {}),
-                "nvme_telemetry": storage_telemetry.get("nvme_telemetry", {}),
+                "nvme_telemetry": res.get("nvme_telemetry", storage_telemetry.get("nvme_telemetry", {})),
+                "timing_breakdown": res.get("timing_breakdown", {}),
                 "token_ids": res["token_ids"],
                 "generated_text": res["generated_text"],
             }
