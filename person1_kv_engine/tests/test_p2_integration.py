@@ -30,7 +30,7 @@ class TestPerson2StorageBackendIntegration:
 
     def test_canonical_geometry_constants(self):
         """Verifies canonical 4 KiB page and 8 KiB block size constants."""
-        backend = create_default_storage_backend()
+        backend = create_default_storage_backend(enable_prefetch=False)
         telemetry = backend.get_telemetry()
         arch = telemetry["architecture"]
         assert arch["channels"] == 8
@@ -41,7 +41,7 @@ class TestPerson2StorageBackendIntegration:
 
     def test_exact_numerical_roundtrip(self):
         """Validates that stored Key and Value tensors are retrieved bit-for-bit identical."""
-        backend = create_default_storage_backend()
+        backend = create_default_storage_backend(enable_prefetch=False)
         rng = np.random.RandomState(42)
 
         # Qwen grouped KV block: 16 tokens x 2 heads x 64 dim FP32
@@ -60,7 +60,7 @@ class TestPerson2StorageBackendIntegration:
 
     def test_parameter_order_interoperability(self):
         """Validates that both P1 and P2 argument conventions work identically."""
-        backend = create_default_storage_backend()
+        backend = create_default_storage_backend(enable_prefetch=False)
         rng = np.random.RandomState(99)
 
         k_data = rng.randn(16, 2, 64).astype(np.float32)
@@ -84,7 +84,7 @@ class TestPerson2StorageBackendIntegration:
 
     def test_multi_channel_striping_all_8_channels(self):
         """Verifies deterministic multi-channel distribution across all 8 channels."""
-        backend = create_default_storage_backend(channels=8)
+        backend = create_default_storage_backend(channels=8, enable_prefetch=False)
         k_buf = np.zeros((16, 2, 64), dtype=np.float32)
         v_buf = np.zeros((16, 2, 64), dtype=np.float32)
 
@@ -115,7 +115,7 @@ class TestPerson2StorageBackendIntegration:
 
     def test_aissd_kv_manager_with_p2_backend(self):
         """Validates that AISSDKVManager offloads and retrieves active KV tensors via P2 backend."""
-        backend = create_default_storage_backend()
+        backend = create_default_storage_backend(enable_prefetch=False)
         mgr = AISSDKVManager(backend=backend, num_layers=24, sink_tokens=4, recent_tokens=16, top_k_pct=10.0)
 
         # Mock prefill cache with 512 tokens
@@ -162,7 +162,7 @@ class TestPerson2StorageBackendIntegration:
 
     def test_zero_artificial_sleep_latency(self):
         """Guarantees zero sleep latency injection and high-throughput execution."""
-        backend = create_default_storage_backend()
+        backend = create_default_storage_backend(enable_prefetch=False)
         k_buf = np.zeros((16, 2, 64), dtype=np.float32)
         v_buf = np.zeros((16, 2, 64), dtype=np.float32)
 

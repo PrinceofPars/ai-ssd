@@ -1,10 +1,9 @@
-#!/usr/bin/env python3
-"""AI-SSD V2 Real Inference Benchmark (Phase 5A).
+"""Real Qwen2.5-0.5B Inference Benchmark for AI-SSD V2.
 
-Measures actual wall-clock Qwen2.5-0.5B inference execution across two genuine modes:
+Measures actual wall-clock Qwen2.5-0.5B inference execution across genuine modes:
 1. BASELINE: Standard causal inference with in-memory DynamicCache.
 2. AI-SSD: Causal inference executing in-storage Top-k KV block selection and retrieval
-   using Person 2's RealInferenceStorageBackend.
+   using Person 3's RealInferencePrefetchAdapter wrapping Person 2's RealInferenceStorageBackend.
 
 Measures strictly the generation execution interval (16 decode steps).
 Zero analytical timing injection; zero sleep; zero fabricated speedup.
@@ -65,6 +64,11 @@ def parse_args():
     parser.add_argument("--topk", type=float, default=10.0, help="Top-k sparsity percentage (default: 10.0)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     parser.add_argument(
+        "--no-prefetch",
+        action="store_true",
+        help="Disable Person 3 prefetch adapter and run Person 2 backend directly",
+    )
+    parser.add_argument(
         "--output-dir",
         type=str,
         default="/opt/ai-ssd-v2/results/p1",
@@ -117,17 +121,37 @@ def print_benchmark_banner(
     print(f"Backend          : {backend_str}")
     print(f"Bytes read       : {bytes_read:,} bytes ({bytes_read / (1024.0 * 1024.0):.2f} MB)")
     print(f"Requests         : {requests}")
-    if telemetry and "channel_distribution" in telemetry:
-        ch_dist = telemetry["channel_distribution"]
-        print("")
-        print("------------------------------------------------------------")
-        print("Hardware Telemetry (Person 2 FTL Multi-Channel Distribution)")
-        print("------------------------------------------------------------")
-        print(f"Per-channel reads: {ch_dist.get('channel_read_counts', {})}")
-        print(f"Per-channel load : {ch_dist.get('per_channel_total_requests', {})}")
-        print(f"Load imbalance   : {ch_dist.get('load_imbalance_percent', 0.0):.2f} %")
-        print(f"Contention ratio : {ch_dist.get('contention_ratio', 1.0):.2f} (vs 8.0x serial conventional)")
-        print(f"Sleep latency    : {telemetry.get('simulated_metrics', {}).get('sleep_latency_injected', False)} (Zero artificial delay)")
+
+    if telemetry:
+        if "demand_hits" in telemetry:
+            print("")
+            print("------------------------------------------------------------")
+            print("Prefetch Telemetry (Person 3 DRAM Staging & Speculative Prefetch)")
+            print("------------------------------------------------------------")
+            print(f"Demand requests  : {telemetry.get('demand_reads')}")
+            print(f"Demand hits      : {telemetry.get('demand_hits')} ({telemetry.get('demand_hit_rate_pct', 0.0):.2f}%)")
+            print(f"Demand misses    : {telemetry.get('demand_misses')}")
+            print(f"Prefetch requests: {telemetry.get('prefetch_requests')}")
+            print(f"Useful prefetches: {telemetry.get('useful_prefetches')} ({telemetry.get('prefetch_accuracy_pct', 0.0):.2f}%)")
+            print(f"Useful bytes     : {telemetry.get('useful_bytes', 0):,} bytes ({telemetry.get('useful_bytes', 0)/(1024.0*1024.0):.2f} MB)")
+            print(f"Wasted bytes     : {telemetry.get('wasted_bytes', 0):,} bytes ({telemetry.get('wasted_bytes', 0)/(1024.0*1024.0):.4f} MB)")
+            print(f"Staging memory   : {telemetry.get('staging_memory_mb', 0.0):.2f} MB (Peak: {telemetry.get('peak_memory_mb', 0.0):.2f} MB)")
+            print(f"Hit avg latency  : {telemetry.get('demand_hit_avg_latency_us', 0.0):.2f} us")
+            print(f"Miss avg latency : {telemetry.get('demand_miss_avg_latency_us', 0.0):.2f} us")
+
+        p2_telem = telemetry.get("storage_backend", telemetry)
+        if isinstance(p2_telem, dict) and "channel_distribution" in p2_telem:
+            ch_dist = p2_telem["channel_distribution"]
+            print("")
+            print("------------------------------------------------------------")
+            print("Hardware Telemetry (Person 2 FTL Multi-Channel Distribution)")
+            print("------------------------------------------------------------")
+            print(f"Per-channel reads: {ch_dist.get('channel_read_counts', {})}")
+            print(f"Per-channel load : {ch_dist.get('per_channel_total_requests', {})}")
+            print(f"Load imbalance   : {ch_dist.get('load_imbalance_percent', 0.0):.2f} %")
+            print(f"Contention ratio : {ch_dist.get('contention_ratio', 1.0):.2f} (vs 8.0x serial conventional)")
+            print(f"Sleep latency    : {p2_telem.get('simulated_metrics', {}).get('sleep_latency_injected', False)} (Zero artificial delay)")
+
     print("")
     print("------------------------------------------------------------")
     print("Classification")
@@ -284,7 +308,9 @@ def main():
         print(f"Saved baseline results to: {baseline_out_path}")
 
     if args.mode in ("ai_ssd", "compare"):
-        print(f"\nExecuting AI-SSD Benchmark ({args.repetitions} repetitions, Top-k={args.topk}%)...")
+        enable_prefetch = not args.no_prefetch
+        prefetch_str = "with P3 DRAM Staging & Prefetch" if enable_prefetch else "Direct P2 Multi-Channel FTL"
+        print(f"\nExecuting AI-SSD Benchmark ({args.repetitions} repetitions, Top-k={args.topk}%, {prefetch_str})...")
         rep_times = []
         rep_tps = []
         rep_rss = []
@@ -298,6 +324,7 @@ def main():
                 decode_tokens=args.decode,
                 top_k_pct=args.topk,
                 seed=args.seed + r,
+                enable_prefetch=enable_prefetch,
             )
             rep_times.append(res["wall_time_s"])
             rep_tps.append(res["tokens_per_second"])
@@ -337,6 +364,7 @@ def main():
             "decode_tokens": args.decode,
             "cpu_threads": args.threads,
             "top_k_percent": args.topk,
+            "prefetch_enabled": enable_prefetch,
             "repetitions": args.repetitions,
             "wall_time_s": {
                 "mean": mean_wall,
@@ -365,8 +393,23 @@ def main():
 
         if telemetry:
             aissd_payload["storage"]["telemetry"] = telemetry
-            if "channel_distribution" in telemetry:
-                aissd_payload["channel_distribution"] = telemetry["channel_distribution"]
+            if "demand_hits" in telemetry:
+                aissd_payload["prefetch"] = {
+                    "demand_requests": telemetry.get("demand_reads"),
+                    "demand_hits": telemetry.get("demand_hits"),
+                    "demand_misses": telemetry.get("demand_misses"),
+                    "demand_hit_rate_pct": telemetry.get("demand_hit_rate_pct"),
+                    "prefetch_requests": telemetry.get("prefetch_requests"),
+                    "useful_prefetches": telemetry.get("useful_prefetches"),
+                    "prefetch_accuracy_pct": telemetry.get("prefetch_accuracy_pct"),
+                    "useful_bytes": telemetry.get("useful_bytes"),
+                    "wasted_bytes": telemetry.get("wasted_bytes"),
+                    "staging_memory_mb": telemetry.get("staging_memory_mb"),
+                    "peak_memory_mb": telemetry.get("peak_memory_mb"),
+                }
+            p2_telem = telemetry.get("storage_backend", telemetry)
+            if isinstance(p2_telem, dict) and "channel_distribution" in p2_telem:
+                aissd_payload["channel_distribution"] = p2_telem["channel_distribution"]
 
         aissd_out_path = os.path.join(args.output_dir, "real_inference_ai_ssd.json")
         with open(aissd_out_path, "w", encoding="utf-8") as f:

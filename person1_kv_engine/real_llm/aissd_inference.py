@@ -49,6 +49,30 @@ for _p2_path in _candidate_p2_paths:
         except Exception:
             pass
 
+# Resilient integration with Person 3's RealInferencePrefetchAdapter
+_P3_AVAILABLE = False
+RealInferencePrefetchAdapter = None
+
+_candidate_p3_paths = [
+    "/home/ubuntu/ai-ssd-p3",
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../ai-ssd-p3")),
+]
+for _p3_path in _candidate_p3_paths:
+    if os.path.isdir(_p3_path):
+        if _p3_path not in sys.path:
+            sys.path.append(_p3_path)
+        try:
+            import person3_system
+            _p3_sys_dir = os.path.join(_p3_path, "person3_system")
+            if _p3_sys_dir not in person3_system.__path__:
+                person3_system.__path__.insert(0, _p3_sys_dir)
+            from person3_system.prefetch.inference_adapter import RealInferencePrefetchAdapter as _P3Adapter
+            RealInferencePrefetchAdapter = _P3Adapter
+            _P3_AVAILABLE = True
+            break
+        except Exception:
+            pass
+
 
 def get_current_rss_mb() -> float:
     """Returns the current process Resident Set Size (RSS) in megabytes."""
@@ -113,14 +137,20 @@ def create_default_storage_backend(
     head_dim: int = 64,
     dtype: str = "float32",
     mapping_mode: str = "tensor_aware",
+    enable_prefetch: bool = True,
+    buffer_capacity_blocks: int = 512,
 ) -> Any:
-    """Creates the production AI-SSD storage backend.
+    """Creates the production AI-SSD storage backend pipeline.
     
-    Defaults to Person 2's RealInferenceStorageBackend (multi-channel FTL + tensor-aware mapping).
+    If enable_prefetch is True and Person 3 is available:
+        Person 3's RealInferencePrefetchAdapter wraps Person 2's RealInferenceStorageBackend.
+    Otherwise:
+        Person 2's RealInferenceStorageBackend (multi-channel FTL + tensor-aware mapping) is returned.
     Falls back to AISSDBlockStorageBackend if P2 is unavailable.
     """
+    backend = None
     if _P2_AVAILABLE and RealInferenceStorageBackend is not None:
-        return RealInferenceStorageBackend(
+        backend = RealInferenceStorageBackend(
             channels=channels,
             num_layers=num_layers,
             num_heads=num_heads,
@@ -129,11 +159,27 @@ def create_default_storage_backend(
             dtype=dtype,
             mapping_mode=mapping_mode,
         )
-    return AISSDBlockStorageBackend(
-        num_layers=num_layers,
-        tokens_per_block=tokens_per_block,
-        head_dim=head_dim,
-    )
+    else:
+        backend = AISSDBlockStorageBackend(
+            num_layers=num_layers,
+            tokens_per_block=tokens_per_block,
+            head_dim=head_dim,
+        )
+
+    if enable_prefetch and _P3_AVAILABLE and RealInferencePrefetchAdapter is not None:
+        adapter = RealInferencePrefetchAdapter(
+            storage_backend=backend,
+            buffer_capacity_blocks=buffer_capacity_blocks,
+            tokens_per_block=tokens_per_block,
+            kv_heads_per_block=num_heads,
+            head_dim=head_dim,
+            dtype=dtype,
+        )
+        if hasattr(adapter, "predictor") and hasattr(adapter.predictor, "total_layers"):
+            adapter.predictor.total_layers = num_layers
+        return adapter
+
+    return backend
 
 
 class AISSDKVManager:
@@ -254,6 +300,11 @@ class AISSDKVManager:
 
             scores.sort(key=lambda x: x[0], reverse=True)
             top_bids = scores[:k_val]
+
+            # Inter-layer speculative prefetch for Layer L+1:
+            if hasattr(self.backend, "predict_and_prefetch") and cand_bids:
+                winning_bids = [bid for _, bid, _ in top_bids]
+                self.backend.predict_and_prefetch(current_layer_id=l_idx, current_block_ids=winning_bids)
 
             # 2. Host retrieves winning blocks over PCIe (TOPK_FETCH)
             for _, bid, actual_tokens in top_bids:
@@ -378,6 +429,7 @@ def run_aissd_decode(
     top_k_pct: float = 10.0,
     seed: int = 42,
     storage_backend: Optional[Any] = None,
+    enable_prefetch: bool = True,
 ) -> Dict[str, Any]:
     """Runs genuine Qwen inference where KV access during decode executes the AI-SSD path.
     
@@ -388,7 +440,7 @@ def run_aissd_decode(
     rss_before = get_current_rss_mb()
 
     if storage_backend is None:
-        backend = create_default_storage_backend()
+        backend = create_default_storage_backend(enable_prefetch=enable_prefetch)
     else:
         backend = storage_backend
 
@@ -476,11 +528,12 @@ def run_aissd_decode(
     peak_rss = get_current_rss_mb()
     mem_stats = kv_mgr.get_memory_stats()
 
-    storage_backend_name = (
-        "Person 2 Multi-Channel Flash FTL (Tensor-Aware)"
-        if getattr(backend, "CLASSIFICATION", None) == "ANALYTICAL"
-        else "AI-SSD BlockStore (Controller Flash Buffer + PCIe Fetch)"
-    )
+    if hasattr(backend, "buffer_capacity_blocks") or "Prefetch" in backend.__class__.__name__:
+        storage_backend_name = "P1 -> P3 (DRAM Staging + Speculative Prefetch) -> P2 (Multi-Channel Flash FTL)"
+    elif getattr(backend, "CLASSIFICATION", None) == "ANALYTICAL":
+        storage_backend_name = "Person 2 Multi-Channel Flash FTL (Tensor-Aware)"
+    else:
+        storage_backend_name = "AI-SSD BlockStore (Controller Flash Buffer + PCIe Fetch)"
 
     generated_text = tokenizer.decode(generated_tokens)
 
@@ -503,6 +556,10 @@ def run_aissd_decode(
     }
 
     if hasattr(backend, "get_telemetry"):
-        result["telemetry"] = backend.get_telemetry()
+        telem = backend.get_telemetry()
+        result["telemetry"] = telem
+        if "storage_backend" in telem:
+            result["storage_telemetry"] = telem["storage_backend"]
+            result["prefetch_telemetry"] = {k: v for k, v in telem.items() if k != "storage_backend"}
 
     return result
