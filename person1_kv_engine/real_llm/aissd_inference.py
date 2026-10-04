@@ -780,20 +780,12 @@ def run_aissd_decode(
                 kv_mgr.append_new_token(layer_idx, k, v)
                 act_k, act_v = kv_mgr.select_and_fetch_active_kv(layer_idx, q)
 
-                # Attention computation on retrieved blocks
+                # Attention computation on retrieved blocks (Optimized Native GQA SDPA)
                 t_attn = time.perf_counter()
-                q_heads = attn_module.config.num_attention_heads
-                kv_heads = attn_module.config.num_key_value_heads
-                gqa = q_heads // kv_heads
-
-                k_exp = act_k.repeat_interleave(gqa, dim=1) if gqa > 1 else act_k
-                v_exp = act_v.repeat_interleave(gqa, dim=1) if gqa > 1 else act_v
-
                 scaling = attn_module.scaling
-                scores = torch.matmul(q, k_exp.transpose(2, 3)) * scaling
-                weights = torch.nn.functional.softmax(scores, dim=-1, dtype=torch.float32).to(q.dtype)
-
-                out = torch.matmul(weights, v_exp)
+                out = torch.nn.functional.scaled_dot_product_attention(
+                    q, act_k, act_v, scale=scaling, enable_gqa=True
+                )
                 out = out.transpose(1, 2).reshape(*input_shape, -1).contiguous()
                 model_timings["attn_matmul_s"] += time.perf_counter() - t_attn
 

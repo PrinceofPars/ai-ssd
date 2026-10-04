@@ -1,0 +1,207 @@
+{
+  "timestamp": "2026-10-04 19:36:12",
+  "wall_time_s": 106.60403982299977,
+  "tokens_per_second": 0.7940941800752997,
+  "timing_breakdown": {
+    "qkv_proj_s": 0.9065,
+    "rope_s": 0.067,
+    "candidate_k_reads_s": 3.8716,
+    "topk_scoring_s": 5.524,
+    "candidate_selection_s": 0.0,
+    "prefetch_s": 0.0003,
+    "winning_v_reads_s": 3.8716,
+    "tensor_recon_s": 0.2705,
+    "active_concat_s": 0.2621,
+    "attn_matmul_s": 0.474,
+    "out_proj_s": 0.538,
+    "mlp_and_norm_s": 4.2289,
+    "bookkeeping_s": 0.0058,
+    "visible_storage_s": 7.7433,
+    "visible_compute_s": 12.2771,
+    "critical_path_total_s": 20.0204,
+    "reconciliation_error_pct": 0.6368,
+    "raw_storage_time_s": 7.7151,
+    "overlap_hidden_s": 0.0,
+    "total_measured_s": 20.0204,
+    "wall_time_s": 20.1487
+  },
+  "pytorch_total_operator_time_ms": 212781.08,
+  "top_pytorch_operators": [
+    {
+      "name": "aten::matmul",
+      "cpu_time_ms": 60977.95,
+      "cpu_time_pct": 28.66,
+      "count": 5144,
+      "cpu_memory_usage_kb": 20238458.25
+    },
+    {
+      "name": "aten::linear",
+      "cpu_time_ms": 60876.43,
+      "cpu_time_pct": 28.61,
+      "count": 4048,
+      "cpu_memory_usage_kb": 20199398.5
+    },
+    {
+      "name": "aten::mm",
+      "cpu_time_ms": 60769.02,
+      "cpu_time_pct": 28.56,
+      "count": 4048,
+      "cpu_memory_usage_kb": 20199398.5
+    },
+    {
+      "name": "aten::scaled_dot_product_attention",
+      "cpu_time_ms": 11352.43,
+      "cpu_time_pct": 5.34,
+      "count": 36,
+      "cpu_memory_usage_kb": 2359296.0
+    },
+    {
+      "name": "aten::_scaled_dot_product_flash_attention_for_cpu",
+      "cpu_time_ms": 11351.81,
+      "cpu_time_pct": 5.33,
+      "count": 36,
+      "cpu_memory_usage_kb": 2377728.0
+    },
+    {
+      "name": "aten::mul",
+      "cpu_time_ms": 2631.48,
+      "cpu_time_pct": 1.24,
+      "count": 8092,
+      "cpu_memory_usage_kb": 23499091.0
+    },
+    {
+      "name": "aten::cat",
+      "cpu_time_ms": 808.76,
+      "cpu_time_pct": 0.38,
+      "count": 3415,
+      "cpu_memory_usage_kb": 6091831.73
+    },
+    {
+      "name": "aten::add",
+      "cpu_time_ms": 764.89,
+      "cpu_time_pct": 0.36,
+      "count": 4625,
+      "cpu_memory_usage_kb": 5944168.65
+    },
+    {
+      "name": "aten::silu",
+      "cpu_time_ms": 720.76,
+      "cpu_time_pct": 0.34,
+      "count": 576,
+      "cpu_memory_usage_kb": 5623848.0
+    },
+    {
+      "name": "aten::pow",
+      "cpu_time_ms": 633.37,
+      "cpu_time_pct": 0.3,
+      "count": 2320,
+      "cpu_memory_usage_kb": 5960950.0
+    },
+    {
+      "name": "aten::repeat_interleave",
+      "cpu_time_ms": 254.27,
+      "cpu_time_pct": 0.12,
+      "count": 1080,
+      "cpu_memory_usage_kb": 7524352.0
+    },
+    {
+      "name": "aten::clone",
+      "cpu_time_ms": 234.51,
+      "cpu_time_pct": 0.11,
+      "count": 1240,
+      "cpu_memory_usage_kb": 7539608.0
+    },
+    {
+      "name": "aten::copy_",
+      "cpu_time_ms": 231.07,
+      "cpu_time_pct": 0.11,
+      "count": 6498,
+      "cpu_memory_usage_kb": 0.0
+    },
+    {
+      "name": "aten::mean",
+      "cpu_time_ms": 182.22,
+      "cpu_time_pct": 0.09,
+      "count": 2320,
+      "cpu_memory_usage_kb": 24296.65
+    },
+    {
+      "name": "aten::neg",
+      "cpu_time_ms": 161.93,
+      "cpu_time_pct": 0.08,
+      "count": 1152,
+      "cpu_memory_usage_kb": 1479960.0
+    },
+    {
+      "name": "aten::sum",
+      "cpu_time_ms": 129.08,
+      "cpu_time_pct": 0.06,
+      "count": 2320,
+      "cpu_memory_usage_kb": 0.0
+    },
+    {
+      "name": "aten::bmm",
+      "cpu_time_ms": 117.2,
+      "cpu_time_pct": 0.06,
+      "count": 1096,
+      "cpu_memory_usage_kb": 39059.75
+    },
+    {
+      "name": "aten::narrow",
+      "cpu_time_ms": 58.31,
+      "cpu_time_pct": 0.03,
+      "count": 34822,
+      "cpu_memory_usage_kb": 0.0
+    },
+    {
+      "name": "aten::unsqueeze",
+      "cpu_time_ms": 51.42,
+      "cpu_time_pct": 0.02,
+      "count": 30361,
+      "cpu_memory_usage_kb": 0.0
+    },
+    {
+      "name": "aten::permute",
+      "cpu_time_ms": 50.73,
+      "cpu_time_pct": 0.02,
+      "count": 28080,
+      "cpu_memory_usage_kb": 0.0
+    },
+    {
+      "name": "aten::slice",
+      "cpu_time_ms": 48.58,
+      "cpu_time_pct": 0.02,
+      "count": 38350,
+      "cpu_memory_usage_kb": 0.0
+    },
+    {
+      "name": "aten::to",
+      "cpu_time_ms": 47.38,
+      "cpu_time_pct": 0.02,
+      "count": 43327,
+      "cpu_memory_usage_kb": 36.54
+    },
+    {
+      "name": "aten::as_strided",
+      "cpu_time_ms": 44.39,
+      "cpu_time_pct": 0.02,
+      "count": 108434,
+      "cpu_memory_usage_kb": 0.0
+    },
+    {
+      "name": "aten::div_",
+      "cpu_time_ms": 38.55,
+      "cpu_time_pct": 0.02,
+      "count": 2320,
+      "cpu_memory_usage_kb": 0.0
+    },
+    {
+      "name": "aten::_to_copy",
+      "cpu_time_ms": 30.72,
+      "cpu_time_pct": 0.01,
+      "count": 5243,
+      "cpu_memory_usage_kb": 36.54
+    }
+  ],
+  "token_match": true
+}
