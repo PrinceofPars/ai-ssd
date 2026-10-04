@@ -1,0 +1,102 @@
+{
+  "title": "AI-SSD V2 \u2014 End-to-End Performance Optimization Results",
+  "git_branch": "v2-performance-optimization",
+  "baseline_commit": "2a6d5537a11ee4a336873307bda488d76c489388",
+  "final_optimized_commit": "5f4b9e4",
+  "configuration": {
+    "model": "Qwen/Qwen3-4B-Instruct-2507",
+    "precision": "FP32",
+    "context_tokens": 4096,
+    "decode_tokens": 16,
+    "cpu_threads": 4,
+    "seed": 42,
+    "storage": "QEMU/NVMe (/dev/nvme0n1)",
+    "in_storage_topk": true,
+    "async_pipeline": true,
+    "prefetch": false
+  },
+  "token_verification": {
+    "expected_token_ids": [
+      11773,
+      48758,
+      6529,
+      19826,
+      4712,
+      57203,
+      12756,
+      3871,
+      1948,
+      279,
+      3239,
+      4621,
+      323,
+      9144,
+      6894,
+      13
+    ],
+    "baseline_token_match": true,
+    "optimized_token_match": true,
+    "exact_match_ratio": "16/16 (100.0%)"
+  },
+  "invariants": {
+    "candidate_k_bytes_to_host": 0,
+    "p2_resident_payload_mb": 0.0,
+    "p3_resident_payload_mb": 0.0,
+    "active_kv_dram_mb": 122.625
+  },
+  "comparison_summary": {
+    "wall_time_s": {
+      "baseline_mean": 20.3258958462,
+      "baseline_std": 0.36003902903993695,
+      "optimized_mean": 16.658406146599738,
+      "optimized_std": 0.40181840315414014,
+      "reduction_seconds": 3.6674896996002637,
+      "reduction_pct": 18.043434480581155
+    },
+    "tokens_per_second": {
+      "baseline_mean": 0.7874246199718218,
+      "baseline_std": 0.014196406731349798,
+      "optimized_mean": 0.9610431046617511,
+      "optimized_std": 0.023513197585576365,
+      "speedup_pct": 22.04890224236859
+    },
+    "peak_rss_mb": {
+      "baseline_mean": 17028.38984375,
+      "optimized_mean": 17356.96015625
+    },
+    "topk_scoring_s": {
+      "baseline_mean": 5.3955,
+      "optimized_mean": 2.32144,
+      "reduction_pct": 56.974515800203875
+    },
+    "attn_matmul_s": {
+      "baseline_mean": 0.44776,
+      "optimized_mean": 0.18383999999999998,
+      "reduction_pct": 58.94229051277471
+    }
+  },
+  "optimizations_accepted": [
+    {
+      "id": "OPT-001",
+      "name": "Native Grouped-Query Attention (SDPA) Kernel Fusion",
+      "commit": "fddad54",
+      "target": "attn_matmul_s",
+      "impact": "Reduced attention latency from 0.4478s to 0.1838s (-58.9%)"
+    },
+    {
+      "id": "OPT-003",
+      "name": "128-Dimensional AVX2/FMA SIMD Attention Vectorization in Guest Daemon",
+      "commit": "5f4b9e4",
+      "target": "topk_scoring_s",
+      "impact": "Reduced in-storage Top-K scoring from 5.3955s to 2.3214s (-57.0%)"
+    }
+  ],
+  "optimizations_rejected": [
+    {
+      "id": "OPT-002",
+      "name": "Consolidated Socket Batch Read Buffer",
+      "decision": "REJECTED & REVERTED",
+      "rationale": "Async pipeline already overlaps winning KV retrieval; dynamic allocations in 2GB guest VM added minor overhead without critical path benefit."
+    }
+  ]
+}
