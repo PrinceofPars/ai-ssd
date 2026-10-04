@@ -80,3 +80,34 @@ Measured on October 4, 2026 before any code changes on branch `v2-performance-op
   - Throughput: **0.823 ± 0.012 tok/s** (vs Baseline: 0.787 ± 0.014 tok/s, **+4.57%**)
   - Peak RSS: **16,830.5 MB** (vs Baseline: 17,028.4 MB)
 - **Decision**: **ACCEPTED & COMMITTED**.
+
+### Experiment OPT-002: Consolidated Socket Response Buffer in NVMe Guest Daemon
+
+- **Target Component**: Visible Storage Retrieval / Batch Read (winning_v_reads_s / IPC socket transport)
+- **Hypothesis**: Consolidating fragmented item header and payload socket writes in OP_BATCH_READ into a single contiguous transmission will reduce TCP packet fragmentation and host ecv() syscall count.
+- **Implementation**: In scripts/nvme_guest_daemon.c, buffered all winning item headers and payloads into a single contiguous memory buffer sent via one write_all() call; updated person2_ssd/nvme_client.py to receive the full batch in a single _recv_exact() call.
+- **Invariants Checked**:
+  - Exact Token Match: **16/16 (100% bit-exact)** ([11773, 48758, 6529, 19826, 4712, 57203, 12756, 3871, 1948, 279, 3239, 4621, 323, 9144, 6894, 13])
+  - Candidate Key bytes to host: **0 bytes** (Invariant held)
+  - P2/P3 resident payload: **0.0 MB** (Invariant held)
+- **Measured Results (5 Repetitions)**:
+  - Wall Time: **20.20 s ± 0.34 s** (vs OPT-001: 19.44 s ± 0.30 s, +3.9% regression)
+  - Throughput: **0.792 ± 0.013 tok/s** (vs OPT-001: 0.823 ± 0.012 tok/s)
+- **Root Cause & Architectural Insight**: The Phase 8 asynchronous pipeline already overlaps winning KV block retrieval in the background with host CPU execution (MLP/attention). Therefore, socket transport latency is off the critical path. Dynamic heap allocations (malloc/ree) inside the 2GB guest VM added minor overhead.
+- **Decision**: **REJECTED & REVERTED** (Implementation reverted to clean commit ddad54).
+
+### Experiment OPT-003: 128-Dimensional AVX2/FMA SIMD Attention Vectorization in NVMe Daemon
+
+- **Target Component**: In-Storage Top-K Scoring (	opk_scoring_s)
+- **Hypothesis**: The guest daemon's compute_block_score_gqa contained a hand-tuned AVX2 kernel only for head_dim == 64, falling back to an unvectorized scalar loop for Qwen3-4B's head_dim == 128 (computing ~4.6 billion scalar operations across 16 decode steps). Implementing an 8-way unrolled 256-bit AVX2/FMA kernel (dot_product_128_avx2) with quad-register accumulation pipelining will drastically reduce in-storage compute latency.
+- **Implementation**: In scripts/nvme_guest_daemon.c, created dot_product_128_avx2 utilizing _mm256_fmadd_ps across 4 independent accumulator registers (cc0, cc1, cc2, cc3), eliminating all scalar inner loops. Recompiled with -O3 -mavx2 -mfma -static into /opt/ai-ssd-v2/images/initramfs.cpio.gz.
+- **Invariants Checked**:
+  - Exact Token Match: **16/16 (100% bit-exact)** ([11773, 48758, 6529, 19826, 4712, 57203, 12756, 3871, 1948, 279, 3239, 4621, 323, 9144, 6894, 13])
+  - Candidate Key bytes to host: **0 bytes** (Invariant held)
+  - P2/P3 resident payload: **0.0 MB** (Invariant held)
+- **Measured Results (5 Repetitions)**:
+  - 	opk_scoring_s: **2.32 s ± 0.02 s** (vs Baseline: 5.40 s ± 0.03 s, **-57.0%**, saving 3.08 seconds)
+  - Wall Time: **16.66 s ± 0.40 s** (vs Baseline: 20.33 s ± 0.36 s, **-18.06%**, saving 3.67 seconds; Min: **15.99 s**)
+  - Throughput: **0.961 ± 0.024 tok/s** (vs Baseline: 0.787 ± 0.014 tok/s, **+22.1%**; Max: **1.000 tok/s**)
+  - Peak RSS: **17,357.0 MB** (vs Baseline: 17,028.4 MB)
+- **Decision**: **ACCEPTED & COMMITTED**.
