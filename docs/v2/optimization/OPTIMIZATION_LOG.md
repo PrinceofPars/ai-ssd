@@ -111,3 +111,39 @@ Measured on October 4, 2026 before any code changes on branch `v2-performance-op
   - Throughput: **0.961 ± 0.024 tok/s** (vs Baseline: 0.787 ± 0.014 tok/s, **+22.1%**; Max: **1.000 tok/s**)
   - Peak RSS: **17,357.0 MB** (vs Baseline: 17,028.4 MB)
 - **Decision**: **ACCEPTED & COMMITTED**.
+
+---
+
+## Final Performance Validation (Release Candidate cc3972e)
+
+### Baseline vs Release Candidate Summary
+
+- **Baseline Anchor Commit**: `2a6d5537a11ee4a336873307bda488d76c489388`
+- **Release Candidate Commit**: `cc3972e`
+- **Benchmark Target**: Qwen3-4B-Instruct-2507, Context=4096, Decode=16, FP32, 4 threads, Virtual NVMe (/dev/nvme0n1), Computational Top-K ON, Async ON, Prefetch OFF.
+- **Statistical Results (5 Independent Repetitions)**:
+  - Baseline Wall Time: **20.326 +/- 0.360 s** (Min: 19.672 s, Max: 20.691 s)
+  - Release Candidate Wall Time: **16.658 +/- 0.402 s** (Min: 15.992 s, Max: 17.113 s)
+  - **Wall Time Reduction**: **-18.04% (-3.668 seconds)**
+  - Baseline Throughput: **0.787 +/- 0.014 tok/s**
+  - Release Candidate Throughput: **0.961 +/- 0.024 tok/s** (Max: **1.000 tok/s**)
+  - **Throughput Increase**: **+22.05%**
+- **Component Speedups**:
+  - In-Storage Top-K Scoring: **5.396 s -> 2.321 s (-56.97%)**
+  - Attention SDPA: **0.448 s -> 0.184 s (-58.94%)**
+- **Correctness**:
+  - Token Match: **16/16 Exact Token IDs** (`[11773, 48758, 6529, 19826, 4712, 57203, 12756, 3871, 1948, 279, 3239, 4621, 323, 9144, 6894, 13]`)
+  - Text: `" hardware accelerated attention scoring engine computes dot products between the query vector and candidate keys."`
+- **Invariants Audited**:
+  - Candidate Key bytes to host: **0 bytes** (100% in-storage filtering invariant held)
+  - P2/P3 resident payload: **0.0 MB** (Host DRAM KV cache truly offloaded)
+  - Active KV in DRAM: **122.6 MB** (vs 1,226 MB in dense unpruned model, **-90.0%**)
+- **Memory Impact**:
+  - Peak RSS: 17,357.0 +/- 225.2 MB vs Baseline 17,028.4 +/- 635.8 MB (+1.93%, well within the +/- 635.8 MB measurement dispersion of PyTorch allocator arena reuse).
+- **Thread Scaling Sanity Check**:
+  - 2 Threads: 16.91 s (0.946 tok/s)
+  - 4 Threads: 16.15 s (0.991 tok/s)
+  - 8 Threads: 15.78 s (1.014 tok/s)
+- **Remaining Dominant Bottleneck**:
+  - Host PyTorch MLP GEMV execution (4.55 s, 27.5% of wall time) on CPU, followed by physical/virtual NVMe winning KV block read latency (3.81 s, 23.0% of wall time).
+
