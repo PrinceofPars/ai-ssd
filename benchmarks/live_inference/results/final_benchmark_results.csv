@@ -1,0 +1,15 @@
+section,name,context,tokens_per_second,wall_time_s,visible_storage_s,visible_compute_s,reconciliation_error_pct,peak_rss_mb,active_kv_mb,candidate_k_bytes_to_host,winning_k_bytes_to_host,winning_v_bytes_to_host,total_bus_movement_bytes,token_match
+benchmark_matrix,Dense Baseline,4096,2.35,6.807,0.0,0.0,0.0,19939.6,1156.5,0,0,0,0,True
+benchmark_matrix,File-backed AI-SSD,4096,1.782,8.979,0.445,8.427,1.18,15878.5,122.6,0,57507840,57507840,115184160,True
+benchmark_matrix,QEMU Host Top-K,4096,0.311,51.386,41.758,9.422,0.4,17460.3,122.6,564019200,0,57507840,621527040,True
+benchmark_matrix,QEMU In-Storage Sync,4096,0.738,21.69,8.232,13.318,0.64,15873.1,122.6,0,57507840,57507840,115184160,True
+benchmark_matrix,QEMU In-Storage Async (Final),4096,0.765,20.921,8.151,12.638,0.63,17554.6,122.6,0,57507840,57507840,115184160,True
+benchmark_matrix,QEMU Async + Prefetch,4096,0.749,21.348,4.622,16.491,1.1,17629.4,122.6,0,57507840,57507840,115184160,True
+context_scaling_4096_baseline,Baseline-4096,4096,2.35,6.807,0.0,6.807,0.0,19939.6,1156.5,0,0,0,0,True
+context_scaling_4096_aissd,AI-SSD-4096,4096,0.765,20.921,8.151,12.638,0.63,17554.6,122.6,0,57507840,57507840,115184160,True
+context_scaling_8192_baseline,Baseline-8192,8192,1.222,13.093,0.0,13.093,0.0,22975.8,2308.5,0,0,0,0,False
+context_scaling_8192_aissd,AI-SSD-8192,8192,0.378,42.367,17.346,24.819,0.48,15922.3,239.6,0,115015680,115015680,230368320,False
+context_scaling_16384_baseline,Baseline-16384,16384,0.76,21.05,0.0,21.05,0.0,30115.0,4594.8,0,0,0,0,False
+context_scaling_16384_aissd,AI-SSD-16384,16384,0.054,298.892,44.573,253.993,0.11,16033.5,464.6,0,225607680,225607680,451876320,False
+context_scaling_32768_baseline,Baseline-32768,32768,0.411,38.966,0.0,38.966,0.0,44070.2,9157.8,0,0,0,0,False
+context_scaling_32768_aissd,AI-SSD-32768,32768,0.024,679.132,97.729,580.81,0.09,16168.0,923.6,0,451215360,451215360,903752640,False

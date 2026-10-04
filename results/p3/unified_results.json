@@ -1,9 +1,9 @@
 {
   "evaluation_title": "AI-SSD V2 Phase 3: Real Prefetch & End-to-End System Evaluation",
-  "timestamp_utc": "2026-10-03T21:17:26.527608Z",
+  "timestamp_utc": "2026-10-04T15:29:33.236799Z",
   "provenance": {
     "environment": {
-      "git_commit": "c82797dbd358d99a0bb1af9b77a4fa14e511787b",
+      "git_commit": "f888a7bf93c34d341fda97343720b71f5fed2951",
       "git_branch": "v2-real-llm-kvssd",
       "hostname": "ip-172-31-27-77",
       "cpu_model": "Intel(R) Xeon(R) Platinum 8488C",
@@ -19,7 +19,7 @@
         "pandas": "not_installed",
         "yaml": "6.0.3"
       },
-      "timestamp": "2026-10-03T21:17:26.234594Z"
+      "timestamp": "2026-10-04T15:29:32.932204Z"
     },
     "trace": {
       "file_path": "/opt/ai-ssd-v2/traces/real_llm/trace_qwen2.5_0.5b_context512.jsonl",
@@ -278,8 +278,8 @@
   "virtual_nvme_storage": {
     "classification": "VIRTUAL-DEVICE",
     "device_image": "/opt/ai-ssd-v2/images/v2_nvme.raw",
-    "device_size_bytes": 4294967296,
-    "raw_block_read_latency_us": 20.43,
+    "device_size_bytes": 17179869184,
+    "raw_block_read_latency_us": 17.73,
     "file_backend_verified": true,
     "qemu_guest_benchmarks": {
       "seq_read_64k": {
