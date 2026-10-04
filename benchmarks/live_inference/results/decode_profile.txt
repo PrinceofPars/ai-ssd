@@ -2,111 +2,111 @@
 AI-SSD V2 — DECODE PATH PROFILING REPORT
 ================================================================================
 
-Wall Time: 106.60 s | Throughput: 0.794 tok/s
+Wall Time: 105.36 s | Throughput: 0.933 tok/s
 
 --- APPLICATION TIMING BREAKDOWN ---
-  qkv_proj_s                  : 0.9065
-  rope_s                      : 0.067
-  candidate_k_reads_s         : 3.8716
-  topk_scoring_s              : 5.524
+  qkv_proj_s                  : 0.9612
+  rope_s                      : 0.0644
+  candidate_k_reads_s         : 3.8664
+  topk_scoring_s              : 2.4647
   candidate_selection_s       : 0.0
   prefetch_s                  : 0.0003
-  winning_v_reads_s           : 3.8716
-  tensor_recon_s              : 0.2705
-  active_concat_s             : 0.2621
-  attn_matmul_s               : 0.474
-  out_proj_s                  : 0.538
-  mlp_and_norm_s              : 4.2289
-  bookkeeping_s               : 0.0058
-  visible_storage_s           : 7.7433
-  visible_compute_s           : 12.2771
-  critical_path_total_s       : 20.0204
-  reconciliation_error_pct    : 0.6368
-  raw_storage_time_s          : 7.7151
+  winning_v_reads_s           : 3.8664
+  tensor_recon_s              : 0.2652
+  active_concat_s             : 0.2552
+  attn_matmul_s               : 0.1969
+  out_proj_s                  : 0.5708
+  mlp_and_norm_s              : 4.499
+  bookkeeping_s               : 0.0057
+  visible_storage_s           : 7.7328
+  visible_compute_s           : 9.2834
+  critical_path_total_s       : 17.0163
+  reconciliation_error_pct    : 0.7384
+  raw_storage_time_s          : 7.7053
   overlap_hidden_s            : 0.0
-  total_measured_s            : 20.0204
-  wall_time_s                 : 20.1487
+  total_measured_s            : 17.0163
+  wall_time_s                 : 17.1428
 
 --- TOP PYTORCH CPU OPERATORS ---
 -----------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
                                                  Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg       CPU Mem  Self CPU Mem    # of Calls  
 -----------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
-                                         aten::matmul         0.07%      54.358ms        77.47%       60.978s      11.854ms      19.30 GB           0 B          5144  
-                                         aten::linear         0.01%      11.771ms        77.34%       60.876s      15.039ms      19.26 GB           0 B          4048  
-                                             aten::mm        77.20%       60.767s        77.20%       60.769s      15.012ms      19.26 GB      19.26 GB          4048  
-                   aten::scaled_dot_product_attention         0.00%     618.452us        14.42%       11.352s     315.345ms       2.25 GB     -18.00 MB            36  
-    aten::_scaled_dot_product_flash_attention_for_cpu        14.42%       11.349s        14.42%       11.352s     315.328ms       2.27 GB     -90.28 MB            36  
-                                            aten::mul         3.34%        2.625s         3.34%        2.631s     325.195us      22.41 GB      22.41 GB          8092  
-                                            aten::cat         0.95%     750.573ms         1.03%     808.762ms     236.826us       5.81 GB       5.81 GB          3415  
-                                            aten::add         0.96%     755.721ms         0.97%     764.892ms     165.382us       5.67 GB       5.67 GB          4625  
-                                           aten::silu         0.92%     720.762ms         0.92%     720.762ms       1.251ms       5.36 GB       5.36 GB           576  
-                                            aten::pow         0.80%     630.755ms         0.80%     633.365ms     273.002us       5.68 GB       5.68 GB          2320  
-                              aten::repeat_interleave         0.01%       8.149ms         0.32%     254.265ms     235.431us       7.18 GB           0 B          1080  
-                                          aten::clone         0.01%       4.372ms         0.30%     234.514ms     189.124us       7.19 GB           0 B          1240  
-                                          aten::copy_         0.29%     231.066ms         0.29%     231.066ms      35.560us           0 B           0 B          6498  
-                                           aten::mean         0.02%      14.593ms         0.23%     182.223ms      78.545us      23.73 MB      23.73 MB          2320  
-                                            aten::neg         0.21%     161.931ms         0.21%     161.931ms     140.565us       1.41 GB       1.41 GB          1152  
-                                            aten::sum         0.16%     124.546ms         0.16%     129.082ms      55.639us           0 B           0 B          2320  
-                                            aten::bmm         0.15%     116.810ms         0.15%     117.203ms     106.937us      38.14 MB      38.14 MB          1096  
-                                         aten::narrow         0.03%      22.104ms         0.07%      58.312ms       1.675us           0 B           0 B         34822  
-                                      aten::unsqueeze         0.05%      39.846ms         0.07%      51.416ms       1.694us           0 B           0 B         30361  
-                                        aten::permute         0.05%      39.830ms         0.06%      50.728ms       1.807us           0 B           0 B         28080  
-                                          aten::slice         0.05%      36.808ms         0.06%      48.576ms       1.267us           0 B           0 B         38350  
-                                             aten::to         0.02%      16.659ms         0.06%      47.383ms       1.094us      36.54 KB           0 B         43327  
-                                     aten::as_strided         0.06%      44.395ms         0.06%      44.395ms       0.409us           0 B           0 B        108434  
-                                           aten::div_         0.02%      18.988ms         0.05%      38.548ms      16.616us           0 B      -9.06 KB          2320  
-                                       aten::_to_copy         0.02%      13.346ms         0.04%      30.724ms       5.860us      36.54 KB           0 B          5243  
-                                      aten::transpose         0.02%      19.554ms         0.04%      27.552ms       3.868us           0 B           0 B          7124  
-                                              aten::t         0.02%      12.969ms         0.03%      26.191ms       6.470us           0 B           0 B          4048  
-                                        aten::reshape         0.01%      10.604ms         0.03%      20.435ms       2.991us           0 B           0 B          6832  
-                                           aten::view         0.02%      16.416ms         0.02%      16.416ms       1.798us           0 B           0 B          9131  
-                                   aten::_unsafe_view         0.02%      13.982ms         0.02%      13.982ms       2.718us           0 B           0 B          5144  
+                                         aten::linear         0.02%      12.107ms        77.65%       61.078s      15.088ms      19.26 GB           0 B          4048  
+                                         aten::matmul         0.06%      47.731ms        77.60%       61.040s      15.020ms      19.26 GB           0 B          4064  
+                                             aten::mm        77.50%       60.964s        77.51%       60.966s      15.061ms      19.26 GB      19.26 GB          4048  
+                   aten::scaled_dot_product_attention         0.01%       4.360ms        14.64%       11.515s      19.991ms       2.26 GB     -18.07 MB           576  
+    aten::_scaled_dot_product_flash_attention_for_cpu        14.61%       11.496s        14.63%       11.510s      19.983ms       2.28 GB     -94.94 MB           576  
+                                            aten::mul         3.33%        2.620s         3.33%        2.620s     346.895us      22.38 GB      22.38 GB          7552  
+                                            aten::cat         0.95%     747.412ms         1.02%     805.167ms     235.774us       5.81 GB       5.81 GB          3415  
+                                            aten::add         0.96%     754.748ms         0.97%     764.044ms     165.199us       5.67 GB       5.67 GB          4625  
+                                           aten::silu         0.91%     718.786ms         0.91%     718.786ms       1.248ms       5.36 GB       5.36 GB           576  
+                                            aten::pow         0.81%     637.948ms         0.81%     640.650ms     276.142us       5.68 GB       5.68 GB          2320  
+                                           aten::mean         0.02%      15.084ms         0.23%     180.845ms      77.950us      23.73 MB      23.73 MB          2320  
+                                            aten::neg         0.21%     161.774ms         0.21%     161.774ms     140.429us       1.41 GB       1.41 GB          1152  
+                                            aten::sum         0.16%     122.205ms         0.16%     126.490ms      54.521us           0 B           0 B          2320  
+                                         aten::narrow         0.03%      21.565ms         0.07%      57.871ms       1.662us           0 B           0 B         34822  
+                                        aten::permute         0.05%      38.896ms         0.06%      50.122ms       1.785us           0 B           0 B         28080  
+                                          aten::slice         0.05%      36.920ms         0.06%      48.765ms       1.272us           0 B           0 B         38350  
+                                      aten::unsqueeze         0.05%      35.565ms         0.06%      46.257ms       1.580us           0 B           0 B         29281  
+                                     aten::as_strided         0.06%      43.514ms         0.06%      43.514ms       0.407us           0 B           0 B        106814  
+                                             aten::to         0.02%      16.148ms         0.05%      42.227ms       1.012us      34.43 KB           0 B         41707  
+                                           aten::div_         0.02%      19.101ms         0.05%      39.272ms      16.927us           0 B      -9.06 KB          2320  
+                                      aten::transpose         0.03%      21.928ms         0.04%      31.115ms       3.167us           0 B           0 B          9824  
+                                              aten::t         0.02%      12.582ms         0.03%      26.237ms       6.481us           0 B           0 B          4048  
+                                       aten::_to_copy         0.01%      11.604ms         0.03%      26.079ms       5.545us      34.43 KB           0 B          4703  
+                                        aten::reshape         0.01%       7.101ms         0.02%      15.801ms       3.382us           0 B           0 B          4672  
+                                   aten::_unsafe_view         0.02%      13.644ms         0.02%      13.644ms       3.357us           0 B           0 B          4064  
+                                           aten::view         0.02%      13.200ms         0.02%      13.200ms       2.053us           0 B           0 B          6431  
+                                  aten::empty_strided         0.01%      11.787ms         0.01%      11.787ms       2.167us       2.27 GB       2.27 GB          5439  
+                                          aten::copy_         0.01%       8.565ms         0.01%       8.565ms       1.756us           0 B           0 B          4878  
+                                          aten::rsqrt         0.01%       7.997ms         0.01%       7.997ms       3.447us      23.73 MB      23.73 MB          2320  
+                                     aten::empty_like         0.00%       3.207ms         0.01%       6.891ms       9.570us       2.26 GB           0 B           720  
 -----------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
-Self CPU time total: 78.714s
+Self CPU time total: 78.660s
 
 
 --- PYTHON CPROFILE TOP CUMULATIVE FUNCTIONS ---
-         6207625 function calls (6188691 primitive calls) in 106.516 seconds
+         6254021 function calls (6235087 primitive calls) in 105.269 seconds
 
    Ordered by: cumulative time
-   List reduced from 434 to 35 due to restriction <35>
+   List reduced from 430 to 35 due to restriction <35>
 
    ncalls  tottime  percall  cumtime  percall filename:lineno(function)
-        1    0.089    0.089  106.603  106.603 /home/ubuntu/ai-ssd/person1_kv_engine/real_llm/aissd_inference.py:699(run_aissd_decode)
-  8736/16    0.018    0.000   94.514    5.907 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/torch/nn/modules/module.py:1779(_wrapped_call_impl)
-  8736/16    0.253    0.000   94.514    5.907 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/torch/nn/modules/module.py:1787(_call_impl)
-       16    0.001    0.000   94.514    5.907 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/utils/generic.py:933(wrapper)
-       16    0.001    0.000   94.512    5.907 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/models/qwen3/modeling_qwen3.py:446(forward)
-       16    0.000    0.000   88.840    5.552 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/utils/generic.py:1006(wrapper)
-       16    0.002    0.000   88.839    5.552 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/utils/output_capturing.py:250(wrapper)
-       16    0.061    0.004   88.837    5.552 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/models/qwen3/modeling_qwen3.py:364(forward)
-      576    0.003    0.000   88.727    0.154 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/modeling_layers.py:81(__call__)
-      576    0.575    0.001   88.669    0.154 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/models/qwen3/modeling_qwen3.py:294(forward)
-     4048    0.016    0.000   60.932    0.015 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/torch/nn/modules/linear.py:130(forward)
-     4048   60.912    0.015   60.912    0.015 {built-in method torch._C._nn.linear}
-      576    0.163    0.000   44.688    0.078 /home/ubuntu/ai-ssd/person1_kv_engine/real_llm/aissd_inference.py:752(forward)
-      576    1.380    0.002   42.102    0.073 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/models/qwen3/modeling_qwen3.py:81(forward)
-       36    0.213    0.006   28.694    0.797 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/models/qwen3/modeling_qwen3.py:241(forward)
-    38880    0.864    0.000   22.384    0.001 /home/ubuntu/ai-ssd/person2_ssd/nvme_client.py:138(_recv_exact)
-   982694   21.093    0.000   21.093    0.000 {method 'recv' of '_socket.socket' objects}
-      540    0.076    0.000   13.858    0.026 /home/ubuntu/ai-ssd/person1_kv_engine/real_llm/aissd_inference.py:405(select_and_fetch_active_kv)
-        1    0.233    0.233   11.763   11.763 /home/ubuntu/ai-ssd/person1_kv_engine/real_llm/aissd_inference.py:330(init_from_prefill)
-     9180    0.150    0.000   11.427    0.001 /home/ubuntu/ai-ssd/person3_system/prefetch/inference_adapter.py:282(write_block)
-       36    0.001    0.000   11.356    0.315 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/integrations/sdpa_attention.py:79(sdpa_attention_forward)
-       36   11.354    0.315   11.354    0.315 {built-in method torch._C._nn.scaled_dot_product_attention}
-     9180    0.357    0.000   11.115    0.001 /home/ubuntu/ai-ssd/person2_ssd/inference_backend.py:209(write_block)
-     9180    0.130    0.000   10.355    0.001 /home/ubuntu/ai-ssd/person2_ssd/nvme_client.py:147(write)
-      540    0.017    0.000    7.736    0.014 /home/ubuntu/ai-ssd/person3_system/prefetch/inference_adapter.py:1063(read_block_batch)
-      540    0.141    0.000    7.708    0.014 /home/ubuntu/ai-ssd/person2_ssd/inference_backend.py:712(read_block_batch)
-      540    0.042    0.000    7.413    0.014 /home/ubuntu/ai-ssd/person2_ssd/nvme_client.py:205(read_batch)
-      540    0.004    0.000    5.521    0.010 /home/ubuntu/ai-ssd/person3_system/prefetch/inference_adapter.py:1132(compute_topk_filter)
-      540    0.115    0.000    5.517    0.010 /home/ubuntu/ai-ssd/person2_ssd/inference_backend.py:822(compute_topk_filter)
-      540    0.067    0.000    5.311    0.010 /home/ubuntu/ai-ssd/person2_ssd/nvme_client.py:264(compute_topk)
-     2320    1.472    0.001    2.347    0.001 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/models/qwen3/modeling_qwen3.py:59(forward)
-       36    1.253    0.035    1.874    0.052 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/models/qwen3/modeling_qwen3.py:147(apply_rotary_pos_emb)
-     3400    0.828    0.000    0.828    0.000 {built-in method torch.cat}
-      576    0.002    0.000    0.730    0.001 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/activations.py:102(forward)
-      576    0.002    0.000    0.728    0.001 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/torch/nn/functional.py:2429(silu)
+        1    0.080    0.080  105.356  105.356 /home/ubuntu/ai-ssd/person1_kv_engine/real_llm/aissd_inference.py:699(run_aissd_decode)
+  8736/16    0.018    0.000   91.295    5.706 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/torch/nn/modules/module.py:1779(_wrapped_call_impl)
+  8736/16    0.245    0.000   91.295    5.706 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/torch/nn/modules/module.py:1787(_call_impl)
+       16    0.001    0.000   91.295    5.706 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/utils/generic.py:933(wrapper)
+       16    0.001    0.000   91.293    5.706 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/models/qwen3/modeling_qwen3.py:446(forward)
+       16    0.000    0.000   85.601    5.350 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/utils/generic.py:1006(wrapper)
+       16    0.002    0.000   85.601    5.350 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/utils/output_capturing.py:250(wrapper)
+       16    0.059    0.004   85.599    5.350 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/models/qwen3/modeling_qwen3.py:364(forward)
+      576    0.003    0.000   85.494    0.148 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/modeling_layers.py:81(__call__)
+      576    0.568    0.001   85.436    0.148 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/models/qwen3/modeling_qwen3.py:294(forward)
+     4048    0.014    0.000   61.131    0.015 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/torch/nn/modules/linear.py:130(forward)
+     4048   61.112    0.015   61.112    0.015 {built-in method torch._C._nn.linear}
+      576    1.354    0.002   42.158    0.073 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/models/qwen3/modeling_qwen3.py:81(forward)
+      576    0.133    0.000   41.398    0.072 /home/ubuntu/ai-ssd/person1_kv_engine/real_llm/aissd_inference.py:752(forward)
+       36    0.211    0.006   28.683    0.797 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/models/qwen3/modeling_qwen3.py:241(forward)
+    38880    0.894    0.000   21.280    0.001 /home/ubuntu/ai-ssd/person2_ssd/nvme_client.py:138(_recv_exact)
+   996723   19.954    0.000   19.954    0.000 {method 'recv' of '_socket.socket' objects}
+        1    0.231    0.231   13.737   13.737 /home/ubuntu/ai-ssd/person1_kv_engine/real_llm/aissd_inference.py:330(init_from_prefill)
+     9180    0.158    0.000   13.399    0.001 /home/ubuntu/ai-ssd/person3_system/prefetch/inference_adapter.py:282(write_block)
+     9180    0.363    0.000   13.067    0.001 /home/ubuntu/ai-ssd/person2_ssd/inference_backend.py:209(write_block)
+     9180    0.139    0.000   12.302    0.001 /home/ubuntu/ai-ssd/person2_ssd/nvme_client.py:147(write)
+      576   11.521    0.020   11.521    0.020 {built-in method torch._C._nn.scaled_dot_product_attention}
+       36    0.001    0.000   11.342    0.315 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/integrations/sdpa_attention.py:79(sdpa_attention_forward)
+      540    0.074    0.000   10.776    0.020 /home/ubuntu/ai-ssd/person1_kv_engine/real_llm/aissd_inference.py:405(select_and_fetch_active_kv)
+      540    0.016    0.000    7.726    0.014 /home/ubuntu/ai-ssd/person3_system/prefetch/inference_adapter.py:1063(read_block_batch)
+      540    0.131    0.000    7.699    0.014 /home/ubuntu/ai-ssd/person2_ssd/inference_backend.py:712(read_block_batch)
+      540    0.042    0.000    7.429    0.014 /home/ubuntu/ai-ssd/person2_ssd/nvme_client.py:205(read_batch)
+      540    0.004    0.000    2.462    0.005 /home/ubuntu/ai-ssd/person3_system/prefetch/inference_adapter.py:1132(compute_topk_filter)
+      540    0.116    0.000    2.457    0.005 /home/ubuntu/ai-ssd/person2_ssd/inference_backend.py:822(compute_topk_filter)
+     2320    1.479    0.001    2.360    0.001 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/models/qwen3/modeling_qwen3.py:59(forward)
+      540    0.067    0.000    2.254    0.004 /home/ubuntu/ai-ssd/person2_ssd/nvme_client.py:264(compute_topk)
+       36    1.250    0.035    1.861    0.052 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/models/qwen3/modeling_qwen3.py:147(apply_rotary_pos_emb)
+     3400    0.825    0.000    0.825    0.000 {built-in method torch.cat}
+      576    0.002    0.000    0.727    0.001 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/transformers/activations.py:102(forward)
+      576    0.002    0.000    0.726    0.001 /home/ubuntu/ai-ssd-p1/.venv/lib/python3.10/site-packages/torch/nn/functional.py:2429(silu)
 
 
 
