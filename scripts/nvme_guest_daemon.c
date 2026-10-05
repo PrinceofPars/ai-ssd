@@ -162,6 +162,133 @@ static inline float compute_block_score_gqa(
     return max_score;
 }
 
+static inline float dot_product_64_fp16_avx2(const float* a, const uint16_t* b) {
+    __m256 b0 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)b));
+    __m256 b1 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 8)));
+    __m256 b2 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 16)));
+    __m256 b3 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 24)));
+
+    __m256 acc0 = _mm256_mul_ps(_mm256_loadu_ps(a), b0);
+    __m256 acc1 = _mm256_mul_ps(_mm256_loadu_ps(a + 8), b1);
+    __m256 acc2 = _mm256_mul_ps(_mm256_loadu_ps(a + 16), b2);
+    __m256 acc3 = _mm256_mul_ps(_mm256_loadu_ps(a + 24), b3);
+
+    __m256 b4 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 32)));
+    __m256 b5 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 40)));
+    __m256 b6 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 48)));
+    __m256 b7 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 56)));
+
+    acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 32), b4, acc0);
+    acc1 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 40), b5, acc1);
+    acc2 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 48), b6, acc2);
+    acc3 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 56), b7, acc3);
+
+    acc0 = _mm256_add_ps(acc0, acc1);
+    acc2 = _mm256_add_ps(acc2, acc3);
+    acc0 = _mm256_add_ps(acc0, acc2);
+
+    __m128 lo = _mm256_castps256_ps128(acc0);
+    __m128 hi = _mm256_extractf128_ps(acc0, 1);
+    __m128 sum128 = _mm_add_ps(lo, hi);
+    sum128 = _mm_hadd_ps(sum128, sum128);
+    sum128 = _mm_hadd_ps(sum128, sum128);
+    return _mm_cvtss_f32(sum128);
+}
+
+static inline float dot_product_128_fp16_avx2(const float* a, const uint16_t* b) {
+    __m256 b0 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)b));
+    __m256 b1 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 8)));
+    __m256 b2 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 16)));
+    __m256 b3 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 24)));
+
+    __m256 acc0 = _mm256_mul_ps(_mm256_loadu_ps(a), b0);
+    __m256 acc1 = _mm256_mul_ps(_mm256_loadu_ps(a + 8), b1);
+    __m256 acc2 = _mm256_mul_ps(_mm256_loadu_ps(a + 16), b2);
+    __m256 acc3 = _mm256_mul_ps(_mm256_loadu_ps(a + 24), b3);
+
+    __m256 b4 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 32)));
+    __m256 b5 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 40)));
+    __m256 b6 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 48)));
+    __m256 b7 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 56)));
+
+    acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 32), b4, acc0);
+    acc1 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 40), b5, acc1);
+    acc2 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 48), b6, acc2);
+    acc3 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 56), b7, acc3);
+
+    __m256 b8 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 64)));
+    __m256 b9 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 72)));
+    __m256 b10 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 80)));
+    __m256 b11 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 88)));
+
+    acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 64), b8, acc0);
+    acc1 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 72), b9, acc1);
+    acc2 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 80), b10, acc2);
+    acc3 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 88), b11, acc3);
+
+    __m256 b12 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 96)));
+    __m256 b13 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 104)));
+    __m256 b14 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 112)));
+    __m256 b15 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(b + 120)));
+
+    acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 96), b12, acc0);
+    acc1 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 104), b13, acc1);
+    acc2 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 112), b14, acc2);
+    acc3 = _mm256_fmadd_ps(_mm256_loadu_ps(a + 120), b15, acc3);
+
+    acc0 = _mm256_add_ps(acc0, acc1);
+    acc2 = _mm256_add_ps(acc2, acc3);
+    acc0 = _mm256_add_ps(acc0, acc2);
+
+    __m128 lo = _mm256_castps256_ps128(acc0);
+    __m128 hi = _mm256_extractf128_ps(acc0, 1);
+    __m128 sum128 = _mm_add_ps(lo, hi);
+    sum128 = _mm_hadd_ps(sum128, sum128);
+    sum128 = _mm_hadd_ps(sum128, sum128);
+    return _mm_cvtss_f32(sum128);
+}
+
+static inline float compute_block_score_gqa_fp16(
+    const float* query,
+    const uint16_t* k_block,
+    int actual_tokens,
+    int q_heads,
+    int kv_heads,
+    int head_dim,
+    float scale
+) {
+    float max_score = -1e30f;
+    int gqa_ratio = (kv_heads > 0) ? (q_heads / kv_heads) : 1;
+    int kv_stride = kv_heads * head_dim;
+
+    for (int t = 0; t < actual_tokens; t++) {
+        const uint16_t* k_token = k_block + (t * kv_stride);
+        for (int qh = 0; qh < q_heads; qh++) {
+            int kh = qh / gqa_ratio;
+            const float* q_vec = query + (qh * head_dim);
+            const uint16_t* k_vec = k_token + (kh * head_dim);
+            float dot;
+            if (head_dim == 128) {
+                dot = dot_product_128_fp16_avx2(q_vec, k_vec);
+            } else if (head_dim == 64) {
+                dot = dot_product_64_fp16_avx2(q_vec, k_vec);
+            } else {
+                dot = 0.0f;
+                for (int d = 0; d < head_dim; d++) {
+                    __m128i h = _mm_cvtsi32_si128((int)k_vec[d]);
+                    float k_f = _mm_cvtss_f32(_mm_cvtph_ps(h));
+                    dot += q_vec[d] * k_f;
+                }
+            }
+            float scaled_dot = dot * scale;
+            if (scaled_dot > max_score) {
+                max_score = scaled_dot;
+            }
+        }
+    }
+    return max_score;
+}
+
 static int read_all(int fd, void *buf, size_t len) {
     size_t total = 0;
     while (total < len) {
@@ -368,10 +495,20 @@ int main(int argc, char **argv) {
                     ssize_t pr = pread(dev_fd, io_buf, item_len, (off_t)cands[i].offset);
                     if (pr != (ssize_t)item_len) continue;
 
-                    float score = compute_block_score_gqa(
-                        query_buf, (const float *)io_buf, (int)cands[i].actual_tokens,
-                        (int)theader.q_heads, (int)theader.kv_heads, (int)theader.head_dim, theader.scale
-                    );
+                    int is_fp16 = (theader.kv_heads > 0 && theader.head_dim > 0 &&
+                                   item_len == cands[i].actual_tokens * theader.kv_heads * theader.head_dim * sizeof(uint16_t));
+                    float score;
+                    if (is_fp16) {
+                        score = compute_block_score_gqa_fp16(
+                            query_buf, (const uint16_t *)io_buf, (int)cands[i].actual_tokens,
+                            (int)theader.q_heads, (int)theader.kv_heads, (int)theader.head_dim, theader.scale
+                        );
+                    } else {
+                        score = compute_block_score_gqa(
+                            query_buf, (const float *)io_buf, (int)cands[i].actual_tokens,
+                            (int)theader.q_heads, (int)theader.kv_heads, (int)theader.head_dim, theader.scale
+                        );
+                    }
 
                     if (effective_k > 0 && score > top_items[effective_k - 1].score) {
                         int insert_pos = (int)effective_k - 1;

@@ -1,0 +1,41 @@
+{
+  "context_4096": {
+    "context_tokens": 4096,
+    "aissd": {
+      "wall_time_s": 13.125824618000479,
+      "tokens_per_second": 1.2189710334890456,
+      "peak_rss_mb": 16679.68359375,
+      "active_kv_mb": 54.5,
+      "cold_kv_mb": 510.0,
+      "storage_read_bytes": 817889280,
+      "candidate_k_bytes": 0,
+      "winning_kv_bytes": 817889280
+    }
+  },
+  "context_8192": {
+    "context_tokens": 8192,
+    "aissd": {
+      "wall_time_s": 18.026321982004447,
+      "tokens_per_second": 0.8875909359642356,
+      "peak_rss_mb": 17072.6953125,
+      "active_kv_mb": 106.5,
+      "cold_kv_mb": 1022.0,
+      "storage_read_bytes": 1635778560,
+      "candidate_k_bytes": 0,
+      "winning_kv_bytes": 1635778560
+    }
+  },
+  "context_16384": {
+    "context_tokens": 16384,
+    "aissd": {
+      "wall_time_s": 40.657467297998664,
+      "tokens_per_second": 0.39353164531199386,
+      "peak_rss_mb": 15924.85546875,
+      "active_kv_mb": 208.5,
+      "cold_kv_mb": 2044.0,
+      "storage_read_bytes": 3240099840,
+      "candidate_k_bytes": 0,
+      "winning_kv_bytes": 3240099840
+    }
+  }
+}

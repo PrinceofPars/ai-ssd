@@ -64,6 +64,9 @@ def run_worker():
     parser.add_argument("--disable-computational-storage", action="store_false", dest="enable_computational_storage")
     parser.add_argument("--enable-async-pipeline", action="store_true", default=False, dest="enable_async_pipeline")
     parser.add_argument("--disable-async-pipeline", action="store_false", dest="enable_async_pipeline")
+    parser.add_argument("--model", type=str, default="Qwen/Qwen3-4B-Instruct-2507")
+    parser.add_argument("--dtype", type=str, default="float32")
+    parser.add_argument("--num-threads", type=int, default=4)
     parser.add_argument("--top-k-pct", type=float, default=10.0)
     parser.add_argument("--context", type=int, required=True)
     parser.add_argument("--rep", type=int, default=0)
@@ -75,21 +78,36 @@ def run_worker():
     mem_start = get_proc_memory()
 
     # Load model
-    print(f"[{args.mode.upper()}] Loading Qwen3-4B-Instruct-2507 (CPU, 4 threads, FP32)...")
+    print(f"[{args.mode.upper()}] Loading {args.model} (CPU, {args.num_threads} threads, {args.dtype})...")
     engine = RealLLMEngine(
-        model_name="Qwen/Qwen3-4B-Instruct-2507",
+        model_name=args.model,
         device="cpu",
-        dtype="float32",
-        num_threads=4,
+        dtype=args.dtype,
+        num_threads=args.num_threads,
     )
     mem_model = get_proc_memory()
     print(f"[{args.mode.upper()}] Model loaded. RSS: {mem_model['vm_rss_mb']:.1f} MB")
 
     # Generate prompt
     print(f"[{args.mode.upper()}] Generating prompt for context={args.context} tokens...")
-    prompt = build_prompt_for_length(engine, target_tokens=args.context)
-    inputs = engine.tokenizer(prompt, return_tensors="pt")
-    input_ids = inputs["input_ids"]
+    if "llama" in args.model.lower():
+        base_text = (
+            "The development of computational storage architectures represents a fundamental paradigm shift "
+            "in modern data-intensive computing systems. Traditional von Neumann computer architectures suffer "
+            "from the classic memory wall problem, where the latency and energy required to transfer data "
+            "across the memory bus significantly constrain end-to-end application throughput. "
+            "In Large Language Model (LLM) autoregressive inference, the key-value (KV) cache grows linearly "
+            "with sequence length, consuming tens of gigabytes of host DRAM and saturating PCIe bandwidth during retrieval. "
+        )
+        base_ids = engine.tokenizer.encode(base_text, add_special_tokens=True)
+        repeats = (args.context // len(base_ids)) + 2
+        full_text = " ".join([base_text] * repeats)
+        full_ids = engine.tokenizer.encode(full_text, add_special_tokens=True)
+        input_ids = torch.tensor([full_ids[:args.context]], dtype=torch.long)
+    else:
+        prompt = build_prompt_for_length(engine, target_tokens=args.context)
+        inputs = engine.tokenizer(prompt, return_tensors="pt")
+        input_ids = inputs["input_ids"]
     actual_tokens = input_ids.shape[1]
     print(f"[{args.mode.upper()}] Input tokens: {actual_tokens}")
 
@@ -143,7 +161,10 @@ def run_worker():
         # AI-SSD mode
         num_layers = getattr(engine.model.config, "num_hidden_layers", 36)
         num_kv_heads = getattr(engine.model.config, "num_key_value_heads", 8)
-        head_dim = getattr(engine.model.config, "head_dim", 128)
+        head_dim = getattr(engine.model.config, "head_dim", None)
+        if head_dim is None:
+            num_heads = getattr(engine.model.config, "num_attention_heads", 32)
+            head_dim = engine.model.config.hidden_size // num_heads
 
         backend = create_default_storage_backend(
             channels=8,
@@ -151,7 +172,7 @@ def run_worker():
             num_layers=num_layers,
             num_heads=num_kv_heads,
             head_dim=head_dim,
-            dtype="float32",
+            dtype=args.dtype,
             mapping_mode=args.mapping_mode,
             storage_mode=args.storage_mode,
             enable_batching=args.enable_batching,

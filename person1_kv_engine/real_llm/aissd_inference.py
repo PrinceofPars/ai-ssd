@@ -20,7 +20,10 @@ import psutil
 import threading
 import torch
 import numpy as np
-from transformers.models.qwen2.modeling_qwen2 import apply_rotary_pos_emb
+try:
+    from transformers.models.llama.modeling_llama import apply_rotary_pos_emb
+except ImportError:
+    from transformers.models.qwen2.modeling_qwen2 import apply_rotary_pos_emb
 
 from person1_kv_engine.c_kernel.kernel_binding import get_native_c_kernel
 
@@ -374,11 +377,12 @@ class AISSDKVManager:
                 total_hist_tok = k_t.shape[0]
 
                 bid = 0
+                np_dtype = np.float16 if self.dtype == torch.float16 else np.float32
                 for b_start in range(0, total_hist_tok, self.tokens_per_block):
                     b_end = min(b_start + self.tokens_per_block, total_hist_tok)
                     tok_count = b_end - b_start
-                    k_blk = np.zeros((self.tokens_per_block, self.num_kv_heads, self.head_dim), dtype=np.float32)
-                    v_blk = np.zeros((self.tokens_per_block, self.num_kv_heads, self.head_dim), dtype=np.float32)
+                    k_blk = np.zeros((self.tokens_per_block, self.num_kv_heads, self.head_dim), dtype=np_dtype)
+                    v_blk = np.zeros((self.tokens_per_block, self.num_kv_heads, self.head_dim), dtype=np_dtype)
                     k_blk[:tok_count] = k_t[b_start:b_end]
                     v_blk[:tok_count] = v_t[b_start:b_end]
                     self.backend.write_block(l_idx, bid, k_blk, v_blk)
@@ -423,6 +427,8 @@ class AISSDKVManager:
         selected_v_blocks = []
 
         if cand_bids:
+            elem_bytes = 2 if getattr(self, "dtype", None) == torch.float16 else 4
+            page_bytes = self.tokens_per_block * self.num_kv_heads * self.head_dim * elem_bytes
             k_val = max(1, int(math.ceil(len(cand_bids) * (self.top_k_pct / 100.0))))
             cand_ids = [bid for bid, _ in cand_bids]
             act_tokens_list = [actual_tokens for _, actual_tokens in cand_bids]
@@ -463,8 +469,8 @@ class AISSDKVManager:
                     blk_elapsed = time.perf_counter() - t_blk_start
                     self.timings["winning_v_reads_s"] += blk_elapsed / 2.0
                     self.timings["candidate_k_reads_s"] += blk_elapsed / 2.0
-                    self.winning_v_bytes_to_host += len(win_bids) * 4096
-                    self.winning_k_bytes_to_host += len(win_bids) * 4096
+                    self.winning_v_bytes_to_host += len(win_bids) * page_bytes
+                    self.winning_k_bytes_to_host += len(win_bids) * page_bytes
 
                     # Inter-layer pipelined async prefetch for Layer L+1:
                     # Dispatched after current layer blocks are read so background storage I/O
@@ -490,7 +496,7 @@ class AISSDKVManager:
                     else:
                         loaded_v_pages = {bid: self.backend.read_value_page(l_idx, bid) for bid in win_bids}
                     self.timings["winning_v_reads_s"] += time.perf_counter() - t_v_start
-                    self.winning_v_bytes_to_host += len(win_bids) * 4096
+                    self.winning_v_bytes_to_host += len(win_bids) * page_bytes
 
                     # Fetch winning K pages (only for winning blocks, NOT candidate blocks!)
                     t_k_start = time.perf_counter()
@@ -499,7 +505,7 @@ class AISSDKVManager:
                     else:
                         loaded_k_pages = {bid: self.backend.read_key_page(l_idx, bid) for bid in win_bids}
                     self.timings["candidate_k_reads_s"] += time.perf_counter() - t_k_start
-                    self.winning_k_bytes_to_host += len(win_bids) * 4096
+                    self.winning_k_bytes_to_host += len(win_bids) * page_bytes
 
             else:
                 # Host-side candidate streaming (Phase 5/6 baseline path)
@@ -516,7 +522,7 @@ class AISSDKVManager:
                         loaded_k_pages[bid] = k_blk
                         k_blocks_list.append(k_blk)
                 self.timings["candidate_k_reads_s"] += time.perf_counter() - t_k_start
-                self.candidate_k_bytes_to_host += len(cand_ids) * 4096
+                self.candidate_k_bytes_to_host += len(cand_ids) * page_bytes
 
                 t_score_start = time.perf_counter()
                 if self.kernel.is_available() and hasattr(self.kernel._lib, "instorage_topk_filter_gqa_avx2"):
@@ -564,7 +570,7 @@ class AISSDKVManager:
                 else:
                     loaded_v_pages = {bid: self.backend.read_value_page(l_idx, bid) for bid in win_bids}
                 self.timings["winning_v_reads_s"] += time.perf_counter() - t_v_start
-                self.winning_v_bytes_to_host += len(win_bids) * 4096
+                self.winning_v_bytes_to_host += len(win_bids) * page_bytes
 
             # Optimization B: Reuse Key pages already loaded during scoring, eliminating duplicate reads
             t_rec_start = time.perf_counter()
@@ -604,7 +610,8 @@ class AISSDKVManager:
         active_tokens = self.sink_tokens + self.recent_tokens + (k_val * self.tokens_per_block)
 
         num_kv_heads = getattr(self, "num_kv_heads", 2)
-        bytes_per_tok_all_layers = num_kv_heads * self.head_dim * 4 * 2 * self.num_layers
+        elem_bytes = 2 if getattr(self, "dtype", None) == torch.float16 else 4
+        bytes_per_tok_all_layers = num_kv_heads * self.head_dim * elem_bytes * 2 * self.num_layers
         total_kv_bytes = total_tokens * bytes_per_tok_all_layers
         active_dram_bytes = active_tokens * bytes_per_tok_all_layers
 
