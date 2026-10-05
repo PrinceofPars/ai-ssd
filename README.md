@@ -28,6 +28,7 @@ Comprehensive technical deep-dives explaining every component from scratch:
 - **[Team Contributions & Subsystem Breakdown](docs/TEAM_CONTRIBUTIONS_AND_ROLES.md)**: Exhaustive breakdown of what Person 1, Person 2, and Person 3 engineered from scratch.
 - **[Problem Statement & Math](docs/problem_statement.md)**: Mathematical formulation of the memory explosion.
 - **[Experimental Scorecard](docs/results.md)**: Verified benchmark scorecards and scaling tables.
+- **[Hardware Roadmap & Physical CSD Specification](docs/v2/HARDWARE_ROADMAP.md)**: Delineation between currently implemented host modules, virtualized/emulated storage subsystems (QEMU NVMe daemon, multi-channel FTL), and future physical hardware targets (FPGA/ARM/RISC-V CSD, physical ONFI NAND channels, hardware FTL, and PCIe TLP measurements).
 
 ---
 
