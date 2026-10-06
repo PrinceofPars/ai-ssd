@@ -322,3 +322,117 @@ class HybridJambaAdapter(ModelAdapter):
                     layer.self_attn.forward = orig_forwards[i]
 
         return orig_forwards, restore
+
+
+class HybridQwen35Adapter(ModelAdapter):
+    """Adapter for Qwen 3.5 hybrid architecture (linear_attn SSM + full self_attn GQA with output gating)."""
+
+    def create_state_provider(
+        self,
+        backend: Any,
+        top_k_pct: float = 10.0,
+        enable_computational_storage: bool = False,
+        enable_prefetch: bool = True,
+        enable_async_pipeline: bool = False,
+    ) -> StateProvider:
+        return HybridStateProvider(
+            config=self.config,
+            backend=backend,
+            tokens_per_block=16,
+            top_k_pct=top_k_pct,
+            enable_computational_storage=enable_computational_storage,
+            enable_prefetch=enable_prefetch,
+            enable_async_pipeline=enable_async_pipeline,
+        )
+
+    def wrap_model_for_aissd(
+        self,
+        model: torch.nn.Module,
+        state_provider: StateProvider,
+        model_timings: Dict[str, float],
+        attn_forward_durations: List[float],
+    ) -> Tuple[Dict[int, Callable], Callable[[], None]]:
+        try:
+            from transformers.models.qwen3_5.modeling_qwen3_5 import apply_rotary_pos_emb
+        except ImportError:
+            try:
+                from transformers.models.qwen2.modeling_qwen2 import apply_rotary_pos_emb
+            except ImportError:
+                apply_rotary_pos_emb = None
+
+        orig_forwards = {}
+        for i, layer in enumerate(model.model.layers):
+            if hasattr(layer, "self_attn") and layer.self_attn is not None:
+                attn = layer.self_attn
+                orig_forwards[i] = attn.forward
+
+                def make_qwen35_attn_fwd(layer_idx: int, original_fwd: Any):
+                    def forward(hidden_states: torch.Tensor, position_embeddings: Tuple[torch.Tensor, torch.Tensor], attention_mask: Optional[torch.Tensor] = None, past_key_values: Optional[Any] = None, **kwargs):
+                        if not state_provider.is_active or hidden_states.shape[1] > 1:
+                            return original_fwd(hidden_states, position_embeddings, attention_mask=attention_mask, past_key_values=past_key_values, **kwargs)
+
+                        t_attn_fwd_start = time.perf_counter()
+                        attn_module = model.model.layers[layer_idx].self_attn
+                        input_shape = hidden_states.shape[:-1]
+                        hidden_shape = (*input_shape, -1, attn_module.head_dim)
+
+                        t_qkv = time.perf_counter()
+                        # Qwen 3.5 q_proj outputs [Q; Gate] of dimension head_dim * 2 per head
+                        q_raw, gate = torch.chunk(
+                            attn_module.q_proj(hidden_states).view(*input_shape, -1, attn_module.head_dim * 2), 2, dim=-1
+                        )
+                        gate = gate.reshape(*input_shape, -1)
+
+                        if hasattr(attn_module, "q_norm"):
+                            q_normed = attn_module.q_norm(q_raw.view(hidden_shape))
+                        else:
+                            q_normed = q_raw.view(hidden_shape)
+
+                        k_raw = attn_module.k_proj(hidden_states).view(hidden_shape)
+                        if hasattr(attn_module, "k_norm"):
+                            k_normed = attn_module.k_norm(k_raw)
+                        else:
+                            k_normed = k_raw
+
+                        q = q_normed.transpose(1, 2)
+                        k = k_normed.transpose(1, 2)
+                        v = attn_module.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+                        model_timings["qkv_proj_s"] += time.perf_counter() - t_qkv
+
+                        t_rope = time.perf_counter()
+                        cos, sin = position_embeddings
+                        if apply_rotary_pos_emb is not None:
+                            q, k = apply_rotary_pos_emb(q, k, cos, sin)
+                        model_timings["rope_s"] += time.perf_counter() - t_rope
+
+                        state_provider.append_new_token(layer_idx, k, v)
+                        act_k, act_v = state_provider.select_and_fetch_active_state(layer_idx, query=q)
+
+                        t_attn = time.perf_counter()
+                        scaling = attn_module.scaling
+                        out = torch.nn.functional.scaled_dot_product_attention(
+                            q, act_k, act_v, scale=scaling, enable_gqa=True
+                        )
+                        out = out.reshape(*input_shape, -1).contiguous()
+                        # Apply Qwen 3.5 attention output gating
+                        out = out * torch.sigmoid(gate)
+                        model_timings["attn_matmul_s"] += time.perf_counter() - t_attn
+
+                        t_out = time.perf_counter()
+                        out = attn_module.o_proj(out)
+                        model_timings["out_proj_s"] += time.perf_counter() - t_out
+
+                        attn_forward_durations.append(time.perf_counter() - t_attn_fwd_start)
+                        return out, None
+
+                    return forward
+
+                attn.forward = make_qwen35_attn_fwd(i, orig_forwards[i])
+
+        def restore():
+            for i, layer in enumerate(model.model.layers):
+                if i in orig_forwards:
+                    layer.self_attn.forward = orig_forwards[i]
+
+        return orig_forwards, restore
+

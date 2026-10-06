@@ -148,6 +148,13 @@ class HybridStateProvider(StateProvider):
 
         # Initialize attention provider on attention layers
         self.attention_provider.init_from_prefill(attn_layers)
+        self.native_cache = native_state
+        # For Attention layers in native_state, empty the unpruned key/value buffers so DRAM is freed
+        if hasattr(native_state, "layers"):
+            for i, layer in enumerate(native_state.layers):
+                if hasattr(layer, "keys") and layer.keys is not None:
+                    layer.keys = torch.empty((layer.keys.shape[0], layer.keys.shape[1], 0, layer.keys.shape[3]), dtype=layer.keys.dtype, device=layer.keys.device)
+                    layer.values = torch.empty((layer.values.shape[0], layer.values.shape[1], 0, layer.values.shape[3]), dtype=layer.values.dtype, device=layer.values.device)
         self.is_active = True
 
     def append_new_token(self, layer_idx: int, *state_tensors: Any) -> None:

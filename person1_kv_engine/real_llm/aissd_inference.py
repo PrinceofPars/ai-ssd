@@ -579,7 +579,11 @@ def run_aissd_decode(
 
             t_step = time.perf_counter()
             with torch.no_grad():
-                step_out = model(input_ids=next_token, position_ids=pos_ids, use_cache=False)
+                step_pkv = getattr(kv_mgr, "native_cache", None)
+                if step_pkv is not None:
+                    step_out = model(input_ids=next_token, position_ids=pos_ids, past_key_values=step_pkv, use_cache=True)
+                else:
+                    step_out = model(input_ids=next_token, position_ids=pos_ids, use_cache=False)
             total_model_forward_s += time.perf_counter() - t_step
 
             t_bk = time.perf_counter()

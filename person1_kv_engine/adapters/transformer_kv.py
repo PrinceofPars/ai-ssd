@@ -117,15 +117,30 @@ class TransformerKVStateProvider(StateProvider):
         return descriptors
 
     def init_from_prefill(self, past_key_values: Any) -> None:
-        if hasattr(past_key_values, "layers"):
+        if isinstance(past_key_values, dict):
+            # Dict mapping layer_idx -> (keys, values)
+            first_layer_idx = next(iter(past_key_values.keys()))
+            first_k = past_key_values[first_layer_idx][0]
+            layers_dict = past_key_values
+        elif hasattr(past_key_values, "layers"):
             self.num_layers = len(past_key_values.layers)
-            first_k = past_key_values.layers[0].keys
+            layers_dict = {}
+            first_k = None
+            for idx, lyr in enumerate(past_key_values.layers):
+                if hasattr(lyr, "keys") and lyr.keys is not None:
+                    layers_dict[idx] = (lyr.keys, lyr.values)
+                    if first_k is None:
+                        first_k = lyr.keys
+            if first_k is None:
+                raise ValueError("No attention layers with keys found in past_key_values")
         elif hasattr(past_key_values, "key_cache"):
             self.num_layers = len(past_key_values.key_cache)
             first_k = past_key_values.key_cache[0]
+            layers_dict = {i: (past_key_values.key_cache[i], past_key_values.value_cache[i]) for i in range(self.num_layers)}
         else:
             self.num_layers = len(past_key_values)
             first_k = past_key_values[0][0]
+            layers_dict = {i: (past_key_values[i][0], past_key_values[i][1]) for i in range(self.num_layers)}
 
         self.num_kv_heads = first_k.shape[1]
         self.head_dim = first_k.shape[3]
@@ -134,17 +149,7 @@ class TransformerKVStateProvider(StateProvider):
         self.page_bytes = self.tokens_per_block * self.num_kv_heads * self.head_dim * self.bytes_per_elem
         np_dtype = np.float16 if self.bytes_per_elem == 2 else np.float32
 
-        for l_idx in range(self.num_layers):
-            if hasattr(past_key_values, "layers"):
-                k_tensor = past_key_values.layers[l_idx].keys
-                v_tensor = past_key_values.layers[l_idx].values
-            elif hasattr(past_key_values, "key_cache"):
-                k_tensor = past_key_values.key_cache[l_idx]
-                v_tensor = past_key_values.value_cache[l_idx]
-            else:
-                k_tensor = past_key_values[l_idx][0]
-                v_tensor = past_key_values[l_idx][1]
-
+        for l_idx, (k_tensor, v_tensor) in layers_dict.items():
             seq_len = k_tensor.shape[2]
 
             # 1. Attention Sinks: retain in host DRAM
@@ -370,14 +375,16 @@ class TransformerKVStateProvider(StateProvider):
         if not self.layer_data:
             return {"active_dram_mb": 0.0, "total_kv_mb": 0.0, "offload_pct": 0.0}
 
-        ld = self.layer_data[0]
+        first_layer_idx = next(iter(self.layer_data.keys()))
+        ld = self.layer_data[first_layer_idx]
         total_tokens = ld["total_tokens"]
         cand_bids = ld["candidate_blocks"]
         k_val = max(1, int(math.ceil(len(cand_bids) * (self.top_k_pct / 100.0)))) if cand_bids else 0
 
         active_tokens = self.sink_tokens + self.recent_tokens + (k_val * self.tokens_per_block)
         bytes_per_elem = getattr(self, "bytes_per_elem", 4)
-        bytes_per_tok_all_layers = self.num_kv_heads * self.head_dim * bytes_per_elem * 2 * self.num_layers
+        num_attn_layers = len(self.layer_data)
+        bytes_per_tok_all_layers = self.num_kv_heads * self.head_dim * bytes_per_elem * 2 * num_attn_layers
         total_kv_bytes = total_tokens * bytes_per_tok_all_layers
         active_dram_bytes = active_tokens * bytes_per_tok_all_layers
 

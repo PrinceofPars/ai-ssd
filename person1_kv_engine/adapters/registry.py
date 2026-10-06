@@ -19,6 +19,7 @@ from person1_kv_engine.adapters.model_adapter import (
     QwenAdapter,
     MistralAdapter,
     HybridJambaAdapter,
+    HybridQwen35Adapter,
 )
 
 logger = logging.getLogger(__name__)
@@ -162,9 +163,9 @@ KNOWN_MODELS: Dict[str, Dict[str, Any]] = {
         "head_dim": 256,
         "hidden_size": 4096,
         "vocab_size": 248320,
-        "has_separable_kv_cache": False,
-        "compatibility_level": CompatibilityLevel.UNSUPPORTED,
-        "compatibility_reason": "Hybrid architecture: 24 of 32 layers are linear attention (SSM) lacking separable KV caches for SSD Top-K offload. Use qwen3-8b for 8B-scale FP16 benchmarks.",
+        "has_separable_kv_cache": True,
+        "compatibility_level": CompatibilityLevel.PARTIAL,
+        "compatibility_reason": "Hybrid Attention + Linear SSM: 8 Full GQA Attention layers offloaded to AI-SSD, 24 Linear Attention SSM layers resident in DRAM",
     },
     "tiny-mistral": {
         "model_id": "openaccess-ai-collective/tiny-mistral",
@@ -253,6 +254,7 @@ class ModelRegistry:
         "mistral": MistralAdapter,
         "llama": MistralAdapter,  # LLaMA shares rotary and SDPA attention interface with Mistral
         "jamba": HybridJambaAdapter,
+        "qwen3_5": HybridQwen35Adapter,
     }
 
     @classmethod
@@ -361,8 +363,8 @@ class ModelRegistry:
             reason = f"Supported {model_type.upper()} Transformer architecture ({attn_type})"
             family = "transformer"
         elif model_type in ("qwen3_5",):
-            comp_level = CompatibilityLevel.UNSUPPORTED
-            reason = f"Hybrid architecture ({model_type}): 75% of layers are linear attention (DeltaNet/SSM) lacking separable KV caches for SSD Top-K offload. Use qwen3-8b for 8B-scale benchmarks."
+            comp_level = CompatibilityLevel.PARTIAL
+            reason = f"Hybrid architecture ({model_type}): Attention KV layers offloaded to AI-SSD, Linear Attention (DeltaNet/SSM) layers resident in DRAM."
             family = "hybrid_recurrent"
         elif model_type in ("jamba",):
             comp_level = CompatibilityLevel.PARTIAL

@@ -31,6 +31,7 @@ from person1_kv_engine.adapters.model_adapter import (
     QwenAdapter,
     MistralAdapter,
     HybridJambaAdapter,
+    HybridQwen35Adapter,
 )
 from person1_kv_engine.adapters.registry import ModelRegistry, KNOWN_MODELS
 from person1_kv_engine.real_llm.aissd_inference import AISSDBlockStorageBackend
@@ -142,8 +143,8 @@ class TestModelRegistry:
         assert models["qwen3-4b"]["compatibility_level"] == CompatibilityLevel.FULL
         assert models["qwen3-8b"]["compatibility_level"] == CompatibilityLevel.FULL
         assert models["qwen3.5-4b"]["compatibility_level"] == CompatibilityLevel.FULL
-        assert models["qwen3.5-9b"]["compatibility_level"] == CompatibilityLevel.UNSUPPORTED
-        assert models["qwen3.5-9b"]["has_separable_kv_cache"] is False
+        assert models["qwen3.5-9b"]["compatibility_level"] == CompatibilityLevel.PARTIAL
+        assert models["qwen3.5-9b"]["has_separable_kv_cache"] is True
 
     def test_tiny_mistral_registered(self):
         models = ModelRegistry.list_models()
@@ -186,6 +187,10 @@ class TestModelRegistry:
         cfg_jam, _, _ = ModelRegistry.detect_model_config("jamba")
         adapter_jam = ModelRegistry.get_adapter(cfg_jam)
         assert isinstance(adapter_jam, HybridJambaAdapter)
+
+        cfg_qwen35, _, _ = ModelRegistry.detect_model_config("qwen3.5-9b")
+        adapter_qwen35 = ModelRegistry.get_adapter(cfg_qwen35)
+        assert isinstance(adapter_qwen35, HybridQwen35Adapter)
 
     def test_custom_model_registration_and_persistence(self, tmp_path):
         from person1_kv_engine.adapters.registry import CUSTOM_MODELS_FILE, save_custom_model, KNOWN_MODELS
