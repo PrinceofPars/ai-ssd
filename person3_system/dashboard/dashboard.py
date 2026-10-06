@@ -112,6 +112,8 @@ def load_json_file(relative_path: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         return None
 
+import streamlit.components.v1 as components
+
 def fmt_val(val: Any, unit: str = "", fmt: str = ".2f") -> str:
     if val is None or (isinstance(val, str) and val.strip().lower() in ["not measured", "none", "nan"]):
         return "Not measured"
@@ -120,6 +122,273 @@ def fmt_val(val: Any, unit: str = "", fmt: str = ".2f") -> str:
         return f"{val_float:{fmt}} {unit}".strip()
     except (ValueError, TypeError):
         return str(val)
+
+
+def render_threejs_bar_chart(title: str, labels: list, values: list, colors: list, y_unit: str = "", height: int = 340):
+    """
+    Renders an interactive 3D WebGL bar chart using Three.js.
+    Features: smooth 3D perspective, interactive mouse hover detection via raycasting,
+    hover glow animation, dynamic HTML tooltip with live coordinates, and smooth lighting.
+    """
+    labels_json = json.dumps(labels)
+    values_json = json.dumps([float(v) for v in values])
+    colors_json = json.dumps(colors)
+    
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        body {{
+          margin: 0;
+          overflow: hidden;
+          background: #0E1117;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          user-select: none;
+        }}
+        #container {{
+          width: 100%;
+          height: {height}px;
+          position: relative;
+        }}
+        #chart-title {{
+          position: absolute;
+          top: 12px;
+          left: 18px;
+          color: #E8EAED;
+          font-weight: 700;
+          font-size: 14px;
+          letter-spacing: 0.3px;
+          z-index: 10;
+          pointer-events: none;
+        }}
+        #tooltip {{
+          position: absolute;
+          display: none;
+          background: rgba(32, 33, 36, 0.94);
+          color: #FFFFFF;
+          padding: 8px 12px;
+          border-radius: 6px;
+          font-size: 12px;
+          font-weight: 600;
+          pointer-events: none;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+          border: 1px solid rgba(255,255,255,0.15);
+          z-index: 20;
+          transform: translate(-50%, -125%);
+          transition: opacity 0.15s ease, transform 0.1s ease;
+          white-space: nowrap;
+        }}
+        #tooltip .val {{
+          color: #8AB4F8;
+          font-size: 13px;
+        }}
+        #badge-3d {{
+          position: absolute;
+          bottom: 8px;
+          right: 12px;
+          background: rgba(26, 115, 232, 0.2);
+          border: 1px solid rgba(26, 115, 232, 0.5);
+          color: #8AB4F8;
+          font-size: 10px;
+          font-weight: 700;
+          padding: 2px 7px;
+          border-radius: 4px;
+          pointer-events: none;
+        }}
+      </style>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    </head>
+    <body>
+      <div id="container">
+        <div id="chart-title">{title}</div>
+        <div id="tooltip"></div>
+        <div id="badge-3d">Three.js 3D Interactive Hover</div>
+      </div>
+      <script>
+        const container = document.getElementById('container');
+        const tooltip = document.getElementById('tooltip');
+        const labels = {labels_json};
+        const values = {values_json};
+        const rawColors = {colors_json};
+        const yUnit = "{y_unit}";
+
+        const width = container.clientWidth || 600;
+        const height = {height};
+
+        // Scene & Camera
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0e1117);
+
+        const camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 1000);
+        camera.position.set(0, 14, 28);
+        camera.lookAt(0, 4, 0);
+
+        // Renderer
+        const renderer = new THREE.WebGLRenderer({{ antialias: true, alpha: true }});
+        renderer.setSize(width, height);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        container.appendChild(renderer.domElement);
+
+        // Lights
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+        dirLight.position.set(15, 30, 20);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 1024;
+        dirLight.shadow.mapSize.height = 1024;
+        scene.add(dirLight);
+
+        const pointLight = new THREE.PointLight(0x4285f4, 1.2, 50);
+        pointLight.position.set(-10, 15, 10);
+        scene.add(pointLight);
+
+        // Ground Plane (Soft grid reflection)
+        const planeGeo = new THREE.PlaneGeometry(60, 30);
+        const planeMat = new THREE.MeshStandardMaterial({{ color: 0x161b22, roughness: 0.9, metalness: 0.1 }});
+        const plane = new THREE.Mesh(planeGeo, planeMat);
+        plane.rotation.x = -Math.PI / 2;
+        plane.position.y = -0.05;
+        plane.receiveShadow = true;
+        scene.add(plane);
+
+        // Grid Helper
+        const grid = new THREE.GridHelper(50, 25, 0x30363d, 0x21262d);
+        grid.position.y = 0;
+        scene.add(grid);
+
+        // Data normalization
+        const maxVal = Math.max(...values, 0.001);
+        const maxHeight = 10;
+        const n = labels.length;
+        const barSpacing = Math.min(2.8, 32 / Math.max(n, 1));
+        const barWidth = barSpacing * 0.65;
+        const startX = -((n - 1) * barSpacing) / 2;
+
+        const bars = [];
+        const barMeshes = [];
+
+        labels.forEach((label, i) => {{
+          const val = values[i];
+          const normH = Math.max(0.15, (val / maxVal) * maxHeight);
+          const colHex = rawColors[i % rawColors.length] || '#1A73E8';
+          const baseColor = new THREE.Color(colHex);
+
+          const geo = new THREE.BoxGeometry(barWidth, normH, barWidth);
+          const mat = new THREE.MeshStandardMaterial({{
+            color: baseColor,
+            roughness: 0.25,
+            metalness: 0.35,
+            emissive: 0x000000,
+            emissiveIntensity: 0.0
+          }});
+
+          const mesh = new THREE.Mesh(geo, mat);
+          mesh.position.set(startX + i * barSpacing, normH / 2, 0);
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+          
+          mesh.userData = {{
+            index: i,
+            label: label,
+            value: val,
+            baseColor: baseColor,
+            initialY: normH / 2,
+            normH: normH
+          }};
+
+          scene.add(mesh);
+          bars.push(mesh);
+          barMeshes.push(mesh);
+        }});
+
+        // Raycasting for interactive hover
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2(-999, -999);
+        let hoveredBar = null;
+
+        function onMouseMove(event) {{
+          const rect = container.getBoundingClientRect();
+          mouse.x = ((event.clientX - rect.left) / width) * 2 - 1;
+          mouse.y = -((event.clientY - rect.top) / height) * 2 + 1;
+
+          raycaster.setFromCamera(mouse, camera);
+          const intersects = raycaster.intersectObjects(barMeshes);
+
+          if (intersects.length > 0) {{
+            const hit = intersects[0].object;
+            if (hoveredBar !== hit) {{
+              if (hoveredBar) resetBar(hoveredBar);
+              hoveredBar = hit;
+              highlightBar(hoveredBar);
+            }}
+            tooltip.style.display = 'block';
+            tooltip.style.left = (event.clientX - rect.left) + 'px';
+            tooltip.style.top = (event.clientY - rect.top) + 'px';
+            const d = hoveredBar.userData;
+            const formattedVal = (d.value % 1 === 0) ? d.value.toLocaleString() : d.value.toFixed(2);
+            tooltip.innerHTML = `<div>${{d.label}}</div><div class="val">${{formattedVal}} ${{yUnit}}</div>`;
+          }} else {{
+            if (hoveredBar) {{
+              resetBar(hoveredBar);
+              hoveredBar = null;
+            }}
+            tooltip.style.display = 'none';
+          }}
+        }}
+
+        function highlightBar(bar) {{
+          bar.material.emissive.copy(bar.userData.baseColor);
+          bar.material.emissiveIntensity = 0.55;
+          bar.scale.set(1.12, 1.05, 1.12);
+        }}
+
+        function resetBar(bar) {{
+          bar.material.emissiveIntensity = 0.0;
+          bar.scale.set(1.0, 1.0, 1.0);
+        }}
+
+        container.addEventListener('mousemove', onMouseMove);
+        container.addEventListener('mouseleave', () => {{
+          if (hoveredBar) resetBar(hoveredBar);
+          hoveredBar = null;
+          tooltip.style.display = 'none';
+        }});
+
+        // Animation Loop
+        let targetRotY = 0;
+        function animate() {{
+          requestAnimationFrame(animate);
+
+          // Subtle interactive parallax based on mouse
+          if (mouse.x > -2) {{
+            camera.position.x += (mouse.x * 3.5 - camera.position.x) * 0.05;
+            camera.position.y += ((14 - mouse.y * 2) - camera.position.y) * 0.05;
+            camera.lookAt(0, 4, 0);
+          }}
+
+          renderer.render(scene, camera);
+        }}
+        animate();
+
+        // Responsive Resize
+        window.addEventListener('resize', () => {{
+          const newW = container.clientWidth || 600;
+          camera.aspect = newW / height;
+          camera.updateProjectionMatrix();
+          renderer.setSize(newW, height);
+        }});
+      </script>
+    </body>
+    </html>
+    """
+    components.html(html_code, height=height + 10)
+
 
 
 # Load all machine-readable benchmark artifacts
@@ -427,17 +696,15 @@ elif selected_section == "4. Qwen3-4B FP32":
             timing.get("rope_s", 0) + timing.get("tensor_recon_s", 0) + timing.get("active_concat_s", 0)
         ]
         
-        fig, ax = plt.subplots(figsize=(8, 3.8))
         colors = ["#4285F4", "#EA4335", "#FBBC05", "#34A853", "#9C27B0", "#00ACC1", "#FF7043", "#9E9E9E"]
-        bars = ax.barh(labels, times, color=colors)
-        ax.set_xlabel("Time (seconds)", fontsize=10)
-        ax.set_title("Qwen3-4B FP32 Timing Profile Breakdown (Critical Path: 20.42s)", fontsize=11, fontweight="bold")
-        for bar in bars:
-            w = bar.get_width()
-            ax.text(w + 0.1, bar.get_y() + bar.get_height()/2, f"{w:.2f}s ({(w/20.42)*100:.1f}%)", va="center", fontsize=8)
-        ax.set_xlim(0, max(times) * 1.3)
-        ax.invert_yaxis()
-        st.pyplot(fig)
+        render_threejs_bar_chart(
+            title="Qwen3-4B FP32 Timing Profile Breakdown (Critical Path: 20.42s)",
+            labels=labels,
+            values=times,
+            colors=colors,
+            y_unit="s",
+            height=340
+        )
 
         st.markdown("#### Multi-Run Repeatability (5 Repetitions)")
         reps = data_final_4b.get("repeatability", {}).get("qemu_final_async", {})
@@ -492,17 +759,15 @@ elif selected_section == "5. Qwen3-8B FP16":
             timing8.get("rope_s", 0) + timing8.get("tensor_recon_s", 0) + timing8.get("active_concat_s", 0)
         ]
         
-        fig, ax = plt.subplots(figsize=(8, 3.8))
         colors = ["#4285F4", "#EA4335", "#FBBC05", "#34A853", "#9C27B0", "#00ACC1", "#FF7043", "#9E9E9E"]
-        bars = ax.barh(labels, times, color=colors)
-        ax.set_xlabel("Time (seconds)", fontsize=10)
-        ax.set_title("Qwen3-8B FP16 Timing Profile Breakdown (Critical Path: 13.37s)", fontsize=11, fontweight="bold")
-        for bar in bars:
-            w = bar.get_width()
-            ax.text(w + 0.1, bar.get_y() + bar.get_height()/2, f"{w:.2f}s ({(w/13.37)*100:.1f}%)", va="center", fontsize=8)
-        ax.set_xlim(0, max(times) * 1.3)
-        ax.invert_yaxis()
-        st.pyplot(fig)
+        render_threejs_bar_chart(
+            title="Qwen3-8B FP16 Timing Profile Breakdown (Critical Path: 13.37s)",
+            labels=labels,
+            values=times,
+            colors=colors,
+            y_unit="s",
+            height=340
+        )
 
         st.markdown("#### Multi-Run Repeatability (5 Repetitions)")
         reps_list = data_base_8b.get("repetitions", [])
@@ -607,41 +872,27 @@ elif selected_section == "6. Qwen3 Comparison":
 
     st.dataframe(comp_df, use_container_width=True)
 
-    st.markdown("#### Visual Comparisons")
+    st.markdown("#### Visual Comparisons (Interactive 3D Hover)")
     vc1, vc2 = st.columns(2)
     with vc1:
-        fig1, ax1 = plt.subplots(figsize=(5, 3.5))
-        models = ["Qwen3-4B FP32", "Qwen3-8B FP16"]
-        aissd_tps = [c_4b.get("tokens_per_second", 0), m_8b.get("tokens_per_second", {}).get("mean", 0)]
-        dense_tps = [d_4b.get("tokens_per_second", 0), dense_8b.get("dense_tok_s", 0)]
-        
-        x = np.arange(len(models))
-        width = 0.35
-        ax1.bar(x - width/2, dense_tps, width, label='Dense Baseline', color='#BDC1C6')
-        ax1.bar(x + width/2, aissd_tps, width, label='AI-SSD V2', color='#1A73E8')
-        ax1.set_ylabel('Tokens / Second', fontsize=10)
-        ax1.set_title('Throughput Comparison (tok/s)', fontweight="bold", fontsize=11)
-        ax1.set_xticks(x)
-        ax1.set_xticklabels(models)
-        ax1.legend()
-        ax1.set_ylim(0, max(dense_tps) * 1.25)
-        st.pyplot(fig1)
+        render_threejs_bar_chart(
+            title="Throughput (tok/s): Dense vs AI-SSD",
+            labels=["4B Dense", "4B AI-SSD", "8B Dense", "8B AI-SSD"],
+            values=[d_4b.get("tokens_per_second", 0), c_4b.get("tokens_per_second", 0), dense_8b.get("dense_tok_s", 0), m_8b.get("tokens_per_second", {}).get("mean", 0)],
+            colors=["#BDC1C6", "#1A73E8", "#BDC1C6", "#34A853"],
+            y_unit="tok/s",
+            height=300
+        )
 
     with vc2:
-        fig2, ax2 = plt.subplots(figsize=(5, 3.5))
-        kv_models = ["Qwen3-4B FP32", "Qwen3-8B FP16"]
-        dense_kvs = [d_4b.get("active_kv_mb", 0), dense_8b.get("dense_kv_mb", 0)]
-        aissd_kvs = [c_4b.get("active_kv_mb", 0), m_8b.get("active_kv_mb", {}).get("mean", 0)]
-        
-        ax2.bar(x - width/2, dense_kvs, width, label='Dense KV Footprint', color='#EA4335')
-        ax2.bar(x + width/2, aissd_kvs, width, label='AI-SSD Active KV', color='#34A853')
-        ax2.set_ylabel('KV Memory in DRAM (MB)', fontsize=10)
-        ax2.set_title('Active KV Footprint Reduction', fontweight="bold", fontsize=11)
-        ax2.set_xticks(x)
-        ax2.set_xticklabels(kv_models)
-        ax2.legend()
-        ax2.set_ylim(0, max(dense_kvs) * 1.25)
-        st.pyplot(fig2)
+        render_threejs_bar_chart(
+            title="KV DRAM Footprint (MB): Dense vs AI-SSD",
+            labels=["4B Dense", "4B AI-SSD", "8B Dense", "8B AI-SSD"],
+            values=[d_4b.get("active_kv_mb", 0), c_4b.get("active_kv_mb", 0), dense_8b.get("dense_kv_mb", 0), m_8b.get("active_kv_mb", {}).get("mean", 0)],
+            colors=["#EA4335", "#34A853", "#EA4335", "#34A853"],
+            y_unit="MB",
+            height=300
+        )
 
 
 # =====================================================================
@@ -799,22 +1050,25 @@ elif selected_section == "9. Thread Scaling":
 
     st.dataframe(pd.DataFrame(t_rows), use_container_width=True)
 
-    st.markdown("#### Throughput vs Thread Count")
-    fig, ax = plt.subplots(figsize=(7, 3.5))
-    x_idx = np.arange(len(threads))
-    w = 0.35
-    tps_4 = [t_4b.get(t, {}).get("tokens_per_second", 0) for t in threads]
-    tps_8 = [t_8b.get(t, {}).get("tokens_per_second", 0) for t in threads]
-
-    ax.bar(x_idx - w/2, tps_4, w, label='Qwen3-4B FP32', color='#1A73E8')
-    ax.bar(x_idx + w/2, tps_8, w, label='Qwen3-8B FP16', color='#34A853')
-    ax.set_ylabel('Tokens / Second', fontsize=10)
-    ax.set_title('Inference Throughput Across Thread Allocations (Canonical: 4 Threads)', fontweight='bold', fontsize=11)
-    ax.set_xticks(x_idx)
-    ax.set_xticklabels([f"{t} Threads{'*' if t=='4' else ''}" for t in threads])
-    ax.legend()
-    ax.grid(axis='y', linestyle=':', alpha=0.6)
-    st.pyplot(fig)
+    st.markdown("#### Throughput vs Thread Count (Interactive 3D Hover)")
+    render_threejs_bar_chart(
+        title="Throughput Across Threads (Canonical: 4 Threads*)",
+        labels=[
+            "4B - 2 Th", "4B - 4 Th*", "4B - 8 Th",
+            "8B - 2 Th", "8B - 4 Th*", "8B - 8 Th"
+        ],
+        values=[
+            t_4b.get("2", {}).get("tokens_per_second", 0),
+            t_4b.get("4", {}).get("tokens_per_second", 0),
+            t_4b.get("8", {}).get("tokens_per_second", 0),
+            t_8b.get("2", {}).get("tokens_per_second", 0),
+            t_8b.get("4", {}).get("tokens_per_second", 0),
+            t_8b.get("8", {}).get("tokens_per_second", 0),
+        ],
+        colors=["#1A73E8", "#4285F4", "#1A73E8", "#34A853", "#0F9D58", "#34A853"],
+        y_unit="tok/s",
+        height=320
+    )
 
 
 # =====================================================================
@@ -925,28 +1179,31 @@ elif selected_section == "11. NVME Telemetry":
         - **Min / Max Channel Reads**: {conv.get('min_channel_load', 0):,} / {conv.get('max_channel_load', 151740):,}
         """)
 
-    # Channel Load Chart
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 3.6))
+    # Channel Load Charts (Interactive 3D Hover)
+    st.markdown("#### 8-Channel Distribution Visualizer (Interactive 3D Hover)")
+    ch_col1, ch_col2 = st.columns(2)
     channels = [f"Ch {i}" for i in range(8)]
     ta_counts = [ta.get("channel_read_counts", {}).get(str(i), 0) for i in range(8)]
     conv_counts = [conv.get("channel_read_counts", {}).get(str(i), 0) for i in range(8)]
 
-    ax1.bar(channels, ta_counts, color='#34A853', width=0.6)
-    ax1.set_title("Tensor-Aware FTL: Balanced Striping", fontweight='bold', fontsize=10)
-    ax1.set_ylabel("Read Requests", fontsize=9)
-    ax1.set_ylim(0, 25000)
-    for i, v in enumerate(ta_counts):
-        ax1.text(i, v + 500, f"{v:,}", ha='center', va='bottom', fontsize=7)
-
-    ax2.bar(channels, conv_counts, color='#EA4335', width=0.6)
-    ax2.set_title("Conventional FTL: Channel 0 Serialization", fontweight='bold', fontsize=10)
-    ax2.set_ylabel("Read Requests", fontsize=9)
-    ax2.set_ylim(0, 165000)
-    for i, v in enumerate(conv_counts):
-        if v > 0:
-            ax2.text(i, v + 2500, f"{v:,}", ha='center', va='bottom', fontsize=7)
-
-    st.pyplot(fig)
+    with ch_col1:
+        render_threejs_bar_chart(
+            title="Tensor-Aware: 8-Channel Balanced Striping",
+            labels=channels,
+            values=ta_counts,
+            colors=["#34A853"] * 8,
+            y_unit="reqs",
+            height=300
+        )
+    with ch_col2:
+        render_threejs_bar_chart(
+            title="Conventional: Channel 0 Serialization (Bottleneck)",
+            labels=channels,
+            values=conv_counts,
+            colors=["#EA4335", "#5F6368", "#5F6368", "#5F6368", "#5F6368", "#5F6368", "#5F6368", "#5F6368"],
+            y_unit="reqs",
+            height=300
+        )
 
 
 # =====================================================================
