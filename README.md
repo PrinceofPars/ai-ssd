@@ -2,7 +2,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests: 164 Passed](https://img.shields.io/badge/tests-164%20passed-brightgreen.svg)]()
+[![Tests: 180 Passed](https://img.shields.io/badge/tests-180%20passed-brightgreen.svg)]()
 [![Status: Validated](https://img.shields.io/badge/status-validated-brightgreen.svg)]()
 
 A co-designed computational storage architecture that offloads large language model (LLM) Key-Value (KV) cache tensors to NVMe storage and executes sparse attention (Top-$K$) scoring directly on the storage controller, breaking the memory wall in long-context generative AI inference.
@@ -158,17 +158,17 @@ Workload: Context=4096, Decode=16 tokens, 4 CPU threads, QEMU/NVMe (`/dev/nvme0n
 ---
 
 ## Quick Start
-
-The AI-SSD V2 execution flow enforces clean separation between firmware initialization and model execution. **The shell script initializes firmware and hardware emulation only; it does NOT execute Python or inference.**
-
+ 
+The AI-SSD V2 execution flow enforces clean separation between firmware initialization and model execution. **The shell scripts initialize/teardown firmware and hardware emulation only; they do NOT execute Python or inference.**
+ 
 ### 1. Enable AI-SSD Firmware
-
+ 
 Launch the firmware initializer to boot the QEMU/KVM virtual NVMe controller (`/dev/nvme0n1`) and the in-storage guest daemon:
-
+ 
 ```bash
 ./enable_ai_ssd.sh
 ```
-
+ 
 Expected output:
 ```text
 ========================================
@@ -182,41 +182,68 @@ Firmware remains enabled.
 Run the inference script manually.
 ========================================
 ```
-
+ 
 The shell script verifies prerequisite disk images, boots the virtual device in the background, validates socket availability on port 9999, and exits cleanly while leaving the firmware active.
-
-### 2. Run Inference Manually
-
-Once the firmware is enabled, invoke the canonical Python demonstration inference CLI:
-
+ 
+### 2. Discover Models & Run Inference Manually
+ 
+Inspect compatible models and run the canonical Python demonstration inference CLI:
+ 
 ```bash
+# Discover supported models and compatibility classification
+python scripts/demo_inference.py --list-models
+
 # Canonical Qwen3-4B FP32 benchmark (4 CPU threads)
 python scripts/demo_inference.py --model qwen3-4b --context 4096 --decode-tokens 16 --threads 4
 
 # Or run Qwen3-8B FP16 benchmark (4 CPU threads)
 python scripts/demo_inference.py --model qwen3-8b --context 4096 --decode-tokens 16 --threads 4
-```
 
+# Or run Mistral architecture with GQA / sliding-window
+python scripts/demo_inference.py --model tiny-mistral --context 4096 --decode-tokens 16 --threads 4
+```
+ 
 > **Canonical Setting**: AI-SSD V2 benchmarks strictly standardize on **4 CPU threads** (`--threads 4`).
 
+### 3. Gracefully Stop Firmware & Clean Runtime
+
+When inference is finished, gracefully tear down the virtual NVMe subsystem:
+
+```bash
+./disable_ai_ssd.sh
+```
+
+Expected output:
+```text
+========================================
+        AI-SSD V2 FIRMWARE TEARDOWN
+========================================
+AI-SSD Firmware: DISABLED
+NVMe Device:     /dev/nvme0n1
+Status:          STOPPED
+Firmware is disabled.
+========================================
+```
+
+The teardown script is idempotent, verifies the virtual NVMe device and guest socket are stopped, cleans up the managed runtime directory (`/tmp/ai-ssd-runtime`), and leaves unrelated host NVMe drives and QEMU instances completely untouched.
+ 
 ---
-
-## Supported Models
-
-AI-SSD V2 currently provides out-of-the-box support for the following architectures:
-
-- **`qwen3-4b`** (`Qwen/Qwen3-4B-Instruct-2507`):
-  - Parameters: 4.02B
-  - Precision: FP32
-  - Architecture: 36 layers, 14 query heads, 2 KV heads (GQA 7:1), head dimension 64
-  - Status: Validated Release Candidate (`cc3972e`)
-- **`qwen3-8b`** (`Qwen/Qwen3-8B`):
-  - Parameters: 8.19B
-  - Precision: FP16
-  - Architecture: 36 layers, 32 query heads, 8 KV heads (GQA 4:1), head dimension 128
-  - Status: Validated Release (`5e1618a`)
-
-For architectural specifications, supported context windows, and model onboarding instructions, see [`docs/v2/MODELS.md`](docs/v2/MODELS.md).
+ 
+## Supported Models & Architecture Compatibility
+ 
+AI-SSD V2 provides an architecture-adaptive state management abstraction (`ModelAdapter` and `StateProvider`) supporting standard Transformers, sliding-window attention, and hybrid Attention + SSM models:
+ 
+| Model Alias | Hugging Face Model ID | Architecture | Attention Type | State Provider | Compatibility |
+|---|---|---|:---:|---|:---:|
+| **`qwen3-4b`** | `Qwen/Qwen3-4B-Instruct-2507` | Qwen2 | GQA (7:1) | `TransformerKVStateProvider` | **`FULL`** |
+| **`qwen3-8b`** | `Qwen/Qwen3-8B` | Qwen2 | GQA (4:1) | `TransformerKVStateProvider` | **`FULL`** |
+| **`qwen2.5-0.5b`** | `Qwen/Qwen2.5-0.5B` | Qwen2 | GQA (7:1) | `TransformerKVStateProvider` | **`FULL`** |
+| **`tiny-mistral`** | `openaccess-ai-collective/tiny-mistral` | Mistral | GQA + Sliding | `SlidingWindowKVStateProvider` | **`FULL`** |
+| **`mistral-7b`** | `mistralai/Mistral-7B-v0.1` | Mistral | GQA + Sliding | `SlidingWindowKVStateProvider` | **`FULL`** |
+| **`jamba`** | `ai21labs/AI21-Jamba-1.5-Mini` | Jamba | Hybrid GQA + Mamba | `HybridStateProvider` | **`PARTIAL`** |
+| **`mamba`** | `state-spaces/mamba-130m-hf` | Mamba | None (Pure SSM) | N/A (No separable KV) | **`UNSUPPORTED`** |
+ 
+For complete architectural details, precision formats, and compatibility rules, see [`docs/v2/MODEL_SUPPORT.md`](docs/v2/MODEL_SUPPORT.md).
 
 ---
 

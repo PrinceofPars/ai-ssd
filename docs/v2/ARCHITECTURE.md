@@ -12,8 +12,10 @@ AI-SSD V2 divides responsibilities across three co-designed layers: the Host Inf
 ```mermaid
 flowchart TB
     subgraph HOST["Host System (Sapphire Rapids CPU)"]
-        subgraph P1["Person 1: KV Engine & Model Runtime"]
-            LLM["Qwen3-4B / Qwen3-8B\n(Transformers PyTorch)"]
+        subgraph P1["Person 1: KV Engine & Architecture Adapters"]
+            LLM["Hugging Face Models\n(Qwen, Mistral, Jamba)"]
+            ADAPTER_ARCH["ModelAdapter Layer\n(QwenAdapter / MistralAdapter / HybridJambaAdapter)"]
+            STATE_PROV["StateProvider Abstraction\n(TransformerKV / SlidingWindowKV / HybridState)"]
             KVMGR["AISSDKVManager\n(Sink + Recent + Sparse Assembly)"]
             SDPA["Native Fused GQA SDPA\n(torch.nn.functional)"]
         end
