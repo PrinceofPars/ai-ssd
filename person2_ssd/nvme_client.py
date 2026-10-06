@@ -270,6 +270,7 @@ class QemuNvmeClient:
         q_heads: int,
         kv_heads: int,
         head_dim: int,
+        is_fp16: bool = False,
     ) -> List[Tuple[float, int, int]]:
         """
         Dispatches in-storage Top-K filtering to /dev/nvme0n1 inside the QEMU guest VM.
@@ -291,8 +292,9 @@ class QemuNvmeClient:
 
             t_pack = time.perf_counter()
             num_cands = len(candidates)
-            # 1. Header: magic, op, flags, reserved, offset, length (num_cands)
-            req_hdr = struct.pack("<IBBHQI", MAGIC, OP_COMPUTE_TOPK, 0, 0, 0, num_cands)
+            # 1. Header: magic, op, flags (1 for fp16, 0 for fp32), reserved, offset, length (num_cands)
+            flags = 1 if is_fp16 else 0
+            req_hdr = struct.pack("<IBBHQI", MAGIC, OP_COMPUTE_TOPK, flags, 0, 0, num_cands)
             # 2. Top-K parameters header: num_candidates, top_k, q_heads, kv_heads, head_dim, scale
             topk_hdr = struct.pack("<IIIIIf", num_cands, top_k, q_heads, kv_heads, head_dim, float(scale))
             # 3. Query array bytes (float32 contiguous)

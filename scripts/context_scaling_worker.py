@@ -70,17 +70,20 @@ def run_worker():
     parser.add_argument("--decode", type=int, default=16)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-json", type=str, required=True)
+    parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-4B-Instruct-2507")
+    parser.add_argument("--dtype", type=str, default="float32")
+    parser.add_argument("--threads", type=int, default=4)
     args = parser.parse_args()
 
     mem_start = get_proc_memory()
 
     # Load model
-    print(f"[{args.mode.upper()}] Loading Qwen3-4B-Instruct-2507 (CPU, 4 threads, FP32)...")
+    print(f"[{args.mode.upper()}] Loading {args.model_name} (CPU, {args.threads} threads, {args.dtype})...")
     engine = RealLLMEngine(
-        model_name="Qwen/Qwen3-4B-Instruct-2507",
+        model_name=args.model_name,
         device="cpu",
-        dtype="float32",
-        num_threads=4,
+        dtype=args.dtype,
+        num_threads=args.threads,
     )
     mem_model = get_proc_memory()
     print(f"[{args.mode.upper()}] Model loaded. RSS: {mem_model['vm_rss_mb']:.1f} MB")
@@ -109,6 +112,9 @@ def run_worker():
 
         output_data = {
             "mode": "BASELINE",
+            "model_name": args.model_name,
+            "dtype": args.dtype,
+            "threads": args.threads,
             "context_length": args.context,
             "actual_tokens": actual_tokens,
             "repetition": args.rep,
@@ -151,7 +157,7 @@ def run_worker():
             num_layers=num_layers,
             num_heads=num_kv_heads,
             head_dim=head_dim,
-            dtype="float32",
+            dtype=args.dtype,
             mapping_mode=args.mapping_mode,
             storage_mode=args.storage_mode,
             enable_batching=args.enable_batching,
@@ -215,6 +221,9 @@ def run_worker():
                 "enable_async_pipeline": args.enable_async_pipeline,
                 "top_k_pct": args.top_k_pct,
                 "backend_classification": getattr(storage, "CLASSIFICATION", "UNKNOWN"),
+                "model_name": args.model_name,
+                "dtype": args.dtype,
+                "threads": args.threads,
                 "context_length": args.context,
                 "actual_tokens": actual_tokens,
                 "repetition": args.rep,

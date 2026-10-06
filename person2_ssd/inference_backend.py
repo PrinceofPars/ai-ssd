@@ -850,6 +850,7 @@ class RealInferenceStorageBackend:
                 cands_info.append((0, 4096, bid, actual_tokens))
 
         if self.storage_mode == "nvme_qemu":
+            is_fp16 = str(self.dtype).lower() in ["float16", "fp16", "torch.float16", "half"]
             results = self._nvme_client.compute_topk(
                 query=query,
                 candidates=cands_info,
@@ -858,6 +859,7 @@ class RealInferenceStorageBackend:
                 q_heads=q_heads,
                 kv_heads=kv_heads,
                 head_dim=head_dim,
+                is_fp16=is_fp16,
             )
         else:
             # File-backed / analytical in-storage simulation
