@@ -137,8 +137,10 @@ class TestModelRegistry:
         models = ModelRegistry.list_models()
         assert "qwen3-4b" in models
         assert "qwen3-8b" in models
+        assert "qwen3.5-4b" in models
         assert models["qwen3-4b"]["compatibility_level"] == CompatibilityLevel.FULL
         assert models["qwen3-8b"]["compatibility_level"] == CompatibilityLevel.FULL
+        assert models["qwen3.5-4b"]["compatibility_level"] == CompatibilityLevel.FULL
 
     def test_tiny_mistral_registered(self):
         models = ModelRegistry.list_models()

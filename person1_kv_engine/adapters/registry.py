@@ -88,6 +88,24 @@ KNOWN_MODELS: Dict[str, Dict[str, Any]] = {
         "compatibility_level": CompatibilityLevel.FULL,
         "compatibility_reason": "Validated development model",
     },
+    "qwen3.5-4b": {
+        "model_id": "Qwen/Qwen3.5-4B-Instruct",
+        "architecture": "qwen2",
+        "model_family": "transformer",
+        "params": "4.0B",
+        "default_precision": "fp32",
+        "supported_precisions": ["fp32", "float32", "fp16", "float16"],
+        "supported_contexts": [512, 1024, 2048, 4096, 8192],
+        "attention_type": "GQA",
+        "num_layers": 36,
+        "num_attention_heads": 16,
+        "num_key_value_heads": 4,
+        "head_dim": 128,
+        "hidden_size": 2048,
+        "vocab_size": 151936,
+        "compatibility_level": CompatibilityLevel.FULL,
+        "compatibility_reason": "Qwen 3.5 GQA Transformer architecture supported via QwenAdapter",
+    },
     "tiny-mistral": {
         "model_id": "openaccess-ai-collective/tiny-mistral",
         "architecture": "mistral",
@@ -187,6 +205,9 @@ class ModelRegistry:
         norm_key = model_identifier.strip().lower()
 
         # 1. Check known aliases
+        if norm_key in ("qwen3.5", "qwen-3.5"):
+            norm_key = "qwen3.5-4b"
+
         if norm_key in KNOWN_MODELS:
             entry = KNOWN_MODELS[norm_key]
             cfg = ModelArchitectureConfig(
@@ -255,7 +276,7 @@ class ModelRegistry:
             attn_type = "MHA"
 
         # Determine compatibility
-        if model_type in ("qwen2", "mistral", "llama"):
+        if model_type in ("qwen2", "qwen", "qwen3", "mistral", "llama"):
             comp_level = CompatibilityLevel.FULL
             reason = f"Supported {model_type.upper()} Transformer architecture ({attn_type})"
             family = "transformer"

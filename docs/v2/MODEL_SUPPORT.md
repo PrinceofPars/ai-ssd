@@ -62,6 +62,7 @@ AI-SSD classifies model architectures into three strict compatibility tiers:
 | `qwen3-4b` | `Qwen/Qwen3-4B-Instruct-2507` | Transformer (Qwen2) | FP32 | GQA (16:4) | `TransformerKVStateProvider` | **`FULL`** |
 | `qwen3-8b` | `Qwen/Qwen3-8B` | Transformer (Qwen2) | FP16 | GQA (32:8) | `TransformerKVStateProvider` | **`FULL`** |
 | `qwen2.5-0.5b` | `Qwen/Qwen2.5-0.5B` | Transformer (Qwen2) | FP32 | GQA (14:2) | `TransformerKVStateProvider` | **`FULL`** |
+| `qwen3.5-4b` | `Qwen/Qwen3.5-4B-Instruct` | Transformer (Qwen2) | FP32 | GQA (16:4) | `TransformerKVStateProvider` | **`FULL`** |
 | `tiny-mistral` | `openaccess-ai-collective/tiny-mistral` | Transformer (Mistral) | FP32 / FP16 | GQA (16:4) + Sliding | `SlidingWindowKVStateProvider` | **`FULL`** |
 | `mistral-7b` | `mistralai/Mistral-7B-v0.1` | Transformer (Mistral) | FP16 | GQA (32:8) + Sliding | `SlidingWindowKVStateProvider` | **`FULL`** |
 | `jamba` | `ai21labs/AI21-Jamba-1.5-Mini` | Hybrid (Transformer + SSM) | FP16 | GQA (32:8) + Mamba | `HybridStateProvider` | **`PARTIAL`** |
