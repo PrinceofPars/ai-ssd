@@ -9,6 +9,7 @@ Measures actual wall-clock execution time strictly over the decode loop.
 Zero analytical timing injection; zero sleep; 100% genuine model forward execution.
 """
 
+import re
 from typing import Dict, Any, List, Tuple, Optional, Union
 import os
 import sys
@@ -22,6 +23,37 @@ import torch
 import numpy as np
 from transformers.models.qwen2.modeling_qwen2 import apply_rotary_pos_emb
 
+try:
+    from tqdm import tqdm
+except ImportError:
+    class tqdm:  # type: ignore
+        """Lightweight terminal progress bar fallback when tqdm is not installed."""
+        def __init__(self, total=100, initial=0, desc="", unit="it", dynamic_ncols=True, leave=True, **kwargs):
+            self.total = total
+            self.n = initial
+            self.desc = desc
+            self.unit = unit
+            self.start_time = time.perf_counter()
+            self._render()
+
+        def update(self, n=1):
+            self.n += n
+            self._render()
+
+        def _render(self):
+            elapsed = time.perf_counter() - self.start_time
+            rate = self.n / max(1e-6, elapsed)
+            pct = int(100 * self.n / max(1, self.total))
+            bar_len = 25
+            filled = int(bar_len * self.n / max(1, self.total))
+            bar = "█" * filled + " " * (bar_len - filled)
+            sys.stdout.write(f"\r{self.desc}: {pct:3d}%|{bar}| {self.n}/{self.total} [{elapsed:.1f}s, {rate:.2f}{self.unit}/s]")
+            sys.stdout.flush()
+
+        def close(self):
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
 from person1_kv_engine.c_kernel.kernel_binding import get_native_c_kernel
 from person1_kv_engine.adapters.registry import ModelRegistry
 from person1_kv_engine.adapters.descriptor import ModelArchitectureConfig, CompatibilityLevel
@@ -29,6 +61,69 @@ from person1_kv_engine.adapters.state_provider import StateProvider
 from person1_kv_engine.adapters.transformer_kv import TransformerKVStateProvider
 
 logger = logging.getLogger(__name__)
+
+_NON_ENGLISH_MASK_CACHE: Dict[int, torch.Tensor] = {}
+
+def is_english_text(text: str) -> bool:
+    """Checks whether text consists predominantly of English/Latin characters, digits, and punctuation."""
+    if not text.strip():
+        return True
+    english_chars = 0
+    total_chars = 0
+    for ch in text:
+        if ch.isspace():
+            continue
+        total_chars += 1
+        # ASCII range (0-127) or Latin-1 Supplement/Extended (0x00A0-0x024F)
+        if ord(ch) < 128 or ("\u00A0" <= ch <= "\u024F"):
+            english_chars += 1
+    if total_chars == 0:
+        return True
+    return (english_chars / total_chars) >= 0.85
+
+
+def get_non_english_token_ids(tokenizer: Any, device: torch.device) -> Optional[torch.Tensor]:
+    """Identifies and caches token IDs containing non-Latin scripts (CJK, Cyrillic, Arabic, etc.)."""
+    if tokenizer is None:
+        return None
+    tok_id = id(tokenizer)
+    if tok_id in _NON_ENGLISH_MASK_CACHE:
+        mask = _NON_ENGLISH_MASK_CACHE[tok_id]
+        return mask.to(device) if mask.device != device else mask
+
+    vocab = getattr(tokenizer, "get_vocab", lambda: {})()
+    if not vocab and hasattr(tokenizer, "vocab"):
+        vocab = tokenizer.vocab
+
+    if not vocab:
+        return None
+
+    # Matches CJK Ideographs, Hangul, Kana, Cyrillic, Arabic, Devanagari, Thai scripts
+    non_latin_pattern = re.compile(
+        r"[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff\uac00-\ud7af\u0400-\u04ff\u0600-\u06ff\u0900-\u097f\u0e00-\u0e7f]"
+    )
+    non_english_ids = []
+    for token_str, token_idx in vocab.items():
+        if non_latin_pattern.search(token_str):
+            non_english_ids.append(token_idx)
+
+    if not non_english_ids:
+        return None
+
+    mask_tensor = torch.tensor(non_english_ids, dtype=torch.long, device=device)
+    _NON_ENGLISH_MASK_CACHE[tok_id] = mask_tensor
+    return mask_tensor
+
+
+def filter_logits_for_english(logits: torch.Tensor, non_english_ids: Optional[torch.Tensor]) -> torch.Tensor:
+    """Suppresses non-English tokens by assigning -infinity to their logits."""
+    if non_english_ids is None or len(non_english_ids) == 0:
+        return logits
+    valid_ids = non_english_ids[non_english_ids < logits.shape[-1]]
+    if len(valid_ids) > 0:
+        logits = logits.clone()
+        logits[:, valid_ids] = -float("inf")
+    return logits
 
 # Resilient integration with Person 2's RealInferenceStorageBackend
 _P2_AVAILABLE = False
@@ -337,8 +432,10 @@ def run_baseline_decode(
     input_ids: torch.Tensor,
     decode_tokens: int = 16,
     seed: int = 42,
+    show_progress: bool = True,
+    enforce_english: bool = True,
 ) -> Dict[str, Any]:
-    """Runs genuine Qwen baseline inference using standard in-memory DynamicCache.
+    """Runs genuine baseline inference using standard in-memory DynamicCache.
     
     Measures ONLY the generation execution interval (16 decode steps).
     """
@@ -346,16 +443,34 @@ def run_baseline_decode(
     gc.collect()
     rss_before = get_current_rss_mb()
 
+    # Pre-cache non-English tokens to guarantee strictly English generation
+    non_eng_mask = get_non_english_token_ids(tokenizer, input_ids.device) if enforce_english else None
+
     # 1. Prefill step (excluded from decode timer)
     with torch.no_grad():
         prefill_out = model(input_ids=input_ids, use_cache=True)
     pkv = prefill_out.past_key_values
-    next_token = torch.argmax(prefill_out.logits[:, -1, :], dim=-1, keepdim=True)
 
+    prefill_last_logits = prefill_out.logits[:, -1, :]
+    if enforce_english and non_eng_mask is not None:
+        prefill_last_logits = filter_logits_for_english(prefill_last_logits, non_eng_mask)
+
+    next_token = torch.argmax(prefill_last_logits, dim=-1, keepdim=True)
     generated_tokens = [next_token.item()]
-    step_logits = [prefill_out.logits[:, -1, :].clone()]
+    step_logits = [prefill_last_logits.clone()]
 
     # 2. Generation execution interval (measured strictly with high-res RSS sampler)
+    pbar = None
+    if show_progress:
+        pbar = tqdm(
+            total=decode_tokens,
+            initial=1,
+            desc="[3/3] Decoding Tokens (Dense Baseline)",
+            unit="tok",
+            dynamic_ncols=True,
+            leave=True,
+        )
+
     sampler = ProcessMemorySampler(sample_interval_s=0.002)
     sampler.start()
     t_start = time.perf_counter()
@@ -363,9 +478,18 @@ def run_baseline_decode(
         with torch.no_grad():
             step_out = model(input_ids=next_token, past_key_values=pkv, use_cache=True)
         pkv = step_out.past_key_values
-        next_token = torch.argmax(step_out.logits[:, -1, :], dim=-1, keepdim=True)
+
+        step_last_logits = step_out.logits[:, -1, :]
+        if enforce_english and non_eng_mask is not None:
+            step_last_logits = filter_logits_for_english(step_last_logits, non_eng_mask)
+
+        next_token = torch.argmax(step_last_logits, dim=-1, keepdim=True)
         generated_tokens.append(next_token.item())
-        step_logits.append(step_out.logits[:, -1, :].clone())
+        step_logits.append(step_last_logits.clone())
+        if pbar is not None:
+            pbar.update(1)
+    if pbar is not None:
+        pbar.close()
     t_end = time.perf_counter()
     proc_mem = sampler.stop()
 
@@ -418,6 +542,8 @@ def run_aissd_decode(
     enable_computational_storage: bool = False,
     enable_async_pipeline: bool = False,
     model_adapter: Optional[Any] = None,
+    show_progress: bool = True,
+    enforce_english: bool = True,
 ) -> Dict[str, Any]:
     """Runs genuine LLM inference where KV access during decode executes the AI-SSD path.
     
@@ -558,9 +684,15 @@ def run_aissd_decode(
             model_timings[k] = 0.0
         attn_forward_durations.clear()
 
-        next_token = torch.argmax(prefill_out.logits[:, -1, :], dim=-1, keepdim=True)
+        non_eng_mask = get_non_english_token_ids(tokenizer, input_ids.device) if enforce_english else None
+
+        prefill_last_logits = prefill_out.logits[:, -1, :]
+        if enforce_english and non_eng_mask is not None:
+            prefill_last_logits = filter_logits_for_english(prefill_last_logits, non_eng_mask)
+
+        next_token = torch.argmax(prefill_last_logits, dim=-1, keepdim=True)
         generated_tokens = [next_token.item()]
-        step_logits = [prefill_out.logits[:, -1, :].clone()]
+        step_logits = [prefill_last_logits.clone()]
         cur_seq_len = input_ids.shape[1]
 
         # Phase B: True Host-RAM Offload - Release prefill activations and original unpruned KV cache!
@@ -569,6 +701,17 @@ def run_aissd_decode(
         gc.collect()
 
         # 2. Generation execution interval (measured strictly with high-res RSS sampler)
+        pbar = None
+        if show_progress:
+            pbar = tqdm(
+                total=decode_tokens,
+                initial=1,
+                desc="[3/3] Decoding Tokens (AI-SSD Accelerated)",
+                unit="tok",
+                dynamic_ncols=True,
+                leave=True,
+            )
+
         sampler = ProcessMemorySampler(sample_interval_s=0.002)
         sampler.start()
         t_start = time.perf_counter()
@@ -587,10 +730,18 @@ def run_aissd_decode(
             total_model_forward_s += time.perf_counter() - t_step
 
             t_bk = time.perf_counter()
-            next_token = torch.argmax(step_out.logits[:, -1, :], dim=-1, keepdim=True)
+            step_last_logits = step_out.logits[:, -1, :]
+            if enforce_english and non_eng_mask is not None:
+                step_last_logits = filter_logits_for_english(step_last_logits, non_eng_mask)
+
+            next_token = torch.argmax(step_last_logits, dim=-1, keepdim=True)
             generated_tokens.append(next_token.item())
-            step_logits.append(step_out.logits[:, -1, :].clone())
+            step_logits.append(step_last_logits.clone())
             model_timings["bookkeeping_s"] += time.perf_counter() - t_bk
+            if pbar is not None:
+                pbar.update(1)
+        if pbar is not None:
+            pbar.close()
         t_end = time.perf_counter()
         proc_mem = sampler.stop()
 

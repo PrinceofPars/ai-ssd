@@ -238,8 +238,8 @@ def inspect_and_register_model(
         family = "transformer"
         arch_type = "qwen2"
     elif model_type in ("qwen3_5",):
-        comp_level = CompatibilityLevel.UNSUPPORTED
-        comp_reason = f"Hybrid architecture ({model_type}): 75% of layers are linear attention (DeltaNet/SSM) lacking separable KV caches for SSD Top-K offload. Use qwen3-8b for 8B-scale benchmarks."
+        comp_level = CompatibilityLevel.PARTIAL
+        comp_reason = "Hybrid Attention + Linear SSM: 8 Full GQA Attention layers offloaded to AI-SSD, 24 Linear Attention SSM layers resident in DRAM via HybridQwen35Adapter"
         family = "hybrid_recurrent"
         arch_type = "qwen3_5"
     elif model_type in ("mistral", "llama", "llama2", "llama3"):

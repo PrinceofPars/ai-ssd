@@ -29,11 +29,12 @@ from person1_kv_engine.real_llm.aissd_inference import (
     run_baseline_decode,
     run_aissd_decode,
     get_current_rss_mb,
+    is_english_text,
 )
 
 
 def build_prompt_for_length(engine: RealLLMEngine, target_tokens: int = 512) -> str:
-    """Builds a deterministic realistic technical prompt of exact target token length."""
+    """Builds a deterministic realistic technical prompt of exact target token length in English."""
     base_paragraph = (
         "AI-SSD computational storage architecture disaggregates Key and Value tensors into 4 KiB flash pages. "
         "The host processor issues top-k search requests to the solid state drive controller over the PCIe NVMe bus. "
@@ -45,7 +46,10 @@ def build_prompt_for_length(engine: RealLLMEngine, target_tokens: int = 512) -> 
     reps = (target_tokens // len(tokens)) + 2
     full_text = base_paragraph * reps
     token_ids = engine.tokenizer(full_text, max_length=target_tokens, truncation=True)["input_ids"]
-    return engine.tokenizer.decode(token_ids, skip_special_tokens=True)
+    prompt = engine.tokenizer.decode(token_ids, skip_special_tokens=True)
+    if not is_english_text(prompt):
+        raise ValueError("Generated prompt fails English language verification.")
+    return prompt
 
 
 def parse_args():

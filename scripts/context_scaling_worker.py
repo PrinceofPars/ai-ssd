@@ -28,6 +28,7 @@ from person1_kv_engine.real_llm.aissd_inference import (
     create_default_storage_backend,
     run_baseline_decode,
     run_aissd_decode,
+    is_english_text,
 )
 from scripts.real_inference_benchmark import build_prompt_for_length
 
@@ -73,12 +74,17 @@ def run_worker():
     parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-4B-Instruct-2507")
     parser.add_argument("--dtype", type=str, default="float32")
     parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument("--prompt", type=str, default=None, help="Explicit prompt text in English")
+    parser.add_argument("--enforce-english", action="store_true", default=True, dest="enforce_english", help="Enforce strictly English token generation")
+    parser.add_argument("--disable-enforce-english", action="store_false", dest="enforce_english", help="Disable English token filtering")
+    parser.add_argument("--show-progress", action="store_true", default=True, dest="show_progress", help="Show interactive decode progress bar")
+    parser.add_argument("--disable-progress", action="store_false", dest="show_progress", help="Disable decode progress bar")
     args = parser.parse_args()
 
     mem_start = get_proc_memory()
 
     # Load model
-    print(f"[{args.mode.upper()}] Loading {args.model_name} (CPU, {args.threads} threads, {args.dtype})...")
+    print(f"\n[1/3] Loading {args.model_name} (CPU, {args.threads} threads, {args.dtype})...", flush=True)
     engine = RealLLMEngine(
         model_name=args.model_name,
         device="cpu",
@@ -86,15 +92,24 @@ def run_worker():
         num_threads=args.threads,
     )
     mem_model = get_proc_memory()
-    print(f"[{args.mode.upper()}] Model loaded. RSS: {mem_model['vm_rss_mb']:.1f} MB")
+    print(f"[{args.mode.upper()}] Model loaded. RSS: {mem_model['vm_rss_mb']:.1f} MB", flush=True)
 
-    # Generate prompt
-    print(f"[{args.mode.upper()}] Generating prompt for context={args.context} tokens...")
-    prompt = build_prompt_for_length(engine, target_tokens=args.context)
+    # Generate prompt & verify English
+    if args.prompt:
+        prompt = args.prompt.strip()
+        if not is_english_text(prompt):
+            raise ValueError(f"Input prompt fails English language verification: {prompt[:100]!r}")
+    else:
+        print(f"[{args.mode.upper()}] Generating prompt for context={args.context} tokens...", flush=True)
+        prompt = build_prompt_for_length(engine, target_tokens=args.context)
+        if not is_english_text(prompt):
+            raise ValueError("Synthesized benchmark prompt fails English verification.")
+
     inputs = engine.tokenizer(prompt, return_tensors="pt")
     input_ids = inputs["input_ids"]
     actual_tokens = input_ids.shape[1]
-    print(f"[{args.mode.upper()}] Input tokens: {actual_tokens}")
+    print(f"[{args.mode.upper()}] Input tokens: {actual_tokens} (Prompt Language: English verified)", flush=True)
+    print(f"\n[2/3] Pre-filling KV Cache ({actual_tokens} tokens)...", flush=True)
 
     effective_seed = args.seed + args.rep
 
@@ -106,6 +121,8 @@ def run_worker():
             input_ids=input_ids,
             decode_tokens=args.decode,
             seed=effective_seed,
+            show_progress=args.show_progress,
+            enforce_english=args.enforce_english,
         )
         total_time = time.perf_counter() - t0
         mem_final = get_proc_memory()
@@ -180,6 +197,8 @@ def run_worker():
                 enable_computational_storage=args.enable_computational_storage,
                 enable_async_pipeline=args.enable_async_pipeline,
                 seed=effective_seed,
+                show_progress=args.show_progress,
+                enforce_english=args.enforce_english,
             )
             total_time = time.perf_counter() - t0
             mem_final = get_proc_memory()
