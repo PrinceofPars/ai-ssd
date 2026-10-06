@@ -8,12 +8,14 @@ $$\text{layers} \times \text{KV heads} \times \text{sequence} \times \text{head\
 
 the runtime provides an **Architecture-Adaptive State Management Layer** composed of two primary abstractions:
 
-1. **`ModelAdapter`**: Encapsulates model-specific internal wiring, forward-pass hooks, rotary positional embeddings (RoPE), and layer wrapping.
-2. **`StateProvider`**: Encapsulates serialization, blockification, storage offload, Top-$K$ retrieval, and working-set reconstruction for reusable sequence states.
+1. **`ModelAdapter`**: Encapsulates model-specific internal wiring, forward-pass hooks, rotary positional embeddings (RoPE), and layer wrapping (`QwenAdapter`, `MistralAdapter`, `HybridJambaAdapter`).
+2. **`StateProvider`**: Encapsulates serialization, blockification, storage offload, Top-$K$ retrieval, and working-set reconstruction for reusable sequence states (`TransformerKVStateProvider`, `SlidingWindowKVStateProvider`, `HybridStateProvider`).
 
 ---
 
-## Architectural Flow
+## 1. Supported Model Architectures
+
+AI-SSD classifies model architectures into three strict compatibility tiers:
 
 ```text
        Hugging Face / PyTorch Model
@@ -43,85 +45,239 @@ the runtime provides an **Architecture-Adaptive State Management Layer** compose
          Layer Attention / SDPA
 ```
 
----
-
-## Supported Architectures and Classification
-
-AI-SSD classifies model architectures into three strict compatibility tiers:
-
-1. **`FULL`**: The model's reusable state is primarily attention Key-Value activations. Historical blocks are offloaded to AI-SSD storage, and Top-$K$ selection executes directly on the storage controller (`candidate_k_bytes_to_host = 0 B`).
-2. **`PARTIAL`**: Hybrid architectures (e.g., Attention + Mamba/SSM). Attention Key-Value tensors are offloaded to AI-SSD storage, while fixed-size recurrent/SSM hidden states remain resident in Host DRAM.
-3. **`UNSUPPORTED`**: Pure state-space or RNN architectures (e.g., Mamba, RWKV). These models maintain compact $O(1)$ recurrent hidden states rather than growing sequence-indexed Key-Value caches, offering no separable block structure for Top-$K$ attention offload.
-
----
-
-## Registered Models Matrix
-
-| Model Identifier | Hugging Face ID | Architecture Family | Precision | Attention Type | State Provider | Compatibility Level |
-|---|---|---|:---:|:---:|---|:---:|
-| `qwen3-4b` | `Qwen/Qwen3-4B-Instruct-2507` | Transformer (Qwen2) | FP32 | GQA (16:4) | `TransformerKVStateProvider` | **`FULL`** |
-| `qwen3-8b` | `Qwen/Qwen3-8B` | Transformer (Qwen2) | FP16 | GQA (32:8) | `TransformerKVStateProvider` | **`FULL`** |
-| `qwen2.5-0.5b` | `Qwen/Qwen2.5-0.5B` | Transformer (Qwen2) | FP32 | GQA (14:2) | `TransformerKVStateProvider` | **`FULL`** |
-| `qwen3.5-4b` | `Qwen/Qwen3.5-4B-Instruct` | Transformer (Qwen2) | FP32 | GQA (16:4) | `TransformerKVStateProvider` | **`FULL`** |
-| `tiny-mistral` | `openaccess-ai-collective/tiny-mistral` | Transformer (Mistral) | FP32 / FP16 | GQA (16:4) + Sliding | `SlidingWindowKVStateProvider` | **`FULL`** |
-| `mistral-7b` | `mistralai/Mistral-7B-v0.1` | Transformer (Mistral) | FP16 | GQA (32:8) + Sliding | `SlidingWindowKVStateProvider` | **`FULL`** |
-| `jamba` | `ai21labs/AI21-Jamba-1.5-Mini` | Hybrid (Transformer + SSM) | FP16 | GQA (32:8) + Mamba | `HybridStateProvider` | **`PARTIAL`** |
-| `mamba` | `state-spaces/mamba-130m-hf` | Pure State-Space (Mamba) | FP32 | None (SSM) | N/A | **`UNSUPPORTED`** |
+### Compatibility Tiers:
+- **`FULL`**: The model's reusable state consists of attention Key-Value activations. Historical blocks are offloaded to AI-SSD storage, and Top-$K$ selection executes directly on the storage controller (`candidate_k_bytes_to_host = 0 B`).
+  - Standard Multi-Head Attention (MHA)
+  - Grouped-Query Attention (GQA)
+  - Multi-Query Attention (MQA)
+  - Sliding-Window Attention (Mistral-style local attention span)
+- **`PARTIAL`**: Hybrid architectures (e.g., Attention + Mamba/SSM). Attention Key-Value tensors are offloaded to AI-SSD storage, while fixed-size recurrent/SSM hidden states remain resident in Host DRAM.
+- **`UNSUPPORTED`**: Pure state-space or RNN architectures (e.g., Mamba, RWKV). These models maintain compact $O(1)$ recurrent hidden states rather than growing sequence-indexed Key-Value caches, offering no separable block structure for Top-$K$ attention offload.
 
 ---
 
-## State Provider Abstractions
+## 2. Current Verified Models
 
-### 1. `TransformerKVStateProvider`
-- Handles standard multi-head attention (MHA), grouped-query attention (GQA), and multi-query attention (MQA).
-- Partitions sequence history into:
-  - **Attention Sinks**: First 4 tokens permanently resident in Host DRAM to anchor softmax distribution.
-  - **Recent Window**: Last 16 tokens resident in Host DRAM for local syntax continuity.
-  - **Offloaded Historical Blocks**: Segmented into 16-token chunks stored as 8 KiB logical blocks on AI-SSD (4 KiB Key page + 4 KiB Value page).
-- Top-$K$ query filtering executes inside the storage device.
+The following models are verified and registered in `person1_kv_engine/adapters/registry.py`:
 
-### 2. `SlidingWindowKVStateProvider`
-- Extends `TransformerKVStateProvider` for models with localized attention spans (e.g. Mistral's 4,096-token sliding window).
-- Computes effective window boundaries:
+| Model Identifier | Hugging Face ID | Architecture Family | Precision | Attention Type | State Provider | Compatibility Level | Verified Status |
+|---|---|---|:---:|:---:|---|:---:|:---:|
+| `qwen3-4b` | `Qwen/Qwen3-4B-Instruct-2507` | Transformer (Qwen2) | FP32 | GQA (16:4) | `TransformerKVStateProvider` | **`FULL`** | Verified (4K–32K) |
+| `qwen3-8b` | `Qwen/Qwen3-8B` | Transformer (Qwen2) | FP16 | GQA (32:8) | `TransformerKVStateProvider` | **`FULL`** | Verified (4K–16K) |
+| `qwen2.5-0.5b` | `Qwen/Qwen2.5-0.5B` | Transformer (Qwen2) | FP32 | GQA (14:2) | `TransformerKVStateProvider` | **`FULL`** | Verified (512–4K) |
+| `qwen3.5-4b` | `Qwen/Qwen3.5-4B-Instruct` | Transformer (Qwen2) | FP32 | GQA (16:4) | `TransformerKVStateProvider` | **`FULL`** | Architecture Ready |
+| `tiny-mistral` | `openaccess-ai-collective/tiny-mistral` | Transformer (Mistral) | FP32 / FP16 | GQA (16:4) + Sliding | `SlidingWindowKVStateProvider` | **`FULL`** | Verified (Unit/E2E) |
+| `mistral-7b` | `mistralai/Mistral-7B-v0.1` | Transformer (Mistral) | FP16 | GQA (32:8) + Sliding | `SlidingWindowKVStateProvider` | **`FULL`** | Architecture Ready |
+| `jamba` | `ai21labs/AI21-Jamba-1.5-Mini` | Hybrid (Transformer + SSM) | FP16 | GQA (32:8) + Mamba | `HybridStateProvider` | **`PARTIAL`** | Architecture Ready |
+| `mamba` | `state-spaces/mamba-130m-hf` | Pure State-Space (Mamba) | FP32 | None (SSM) | N/A | **`UNSUPPORTED`** | Rejected (Pure SSM) |
 
-$$\text{Active Window} = [\max(0, \text{total\_tokens} - W), \text{total\_tokens}]$$
-
-- Blocks strictly older than the active window are skipped during retrieval, eliminating redundant I/O traffic.
-
-### 3. `HybridStateProvider`
-- Manages hybrid models containing both Transformer self-attention layers and Mamba/SSM recurrent layers (e.g., Jamba).
-- **Attention Layers**: Key and Value activations are blockified and offloaded to AI-SSD flash storage.
-- **SSM Layers**: Recurrent state vectors are retained in Host DRAM because their size is fixed across all sequence lengths and must be updated every token.
+> **Note on Verification**: `qwen3-4b` (FP32) and `qwen3-8b` (FP16) are canonical released benchmarks with end-to-end hardware telemetry. `tiny-mistral` is verified via unit and adapter suites. Larger models (`mistral-7b`, `jamba`) are architecture-validated but require explicit model weight downloads and sufficient host RAM before full execution.
 
 ---
 
-## CLI Usage
+## 3. How to Download a Model
 
-### List Available Models & Compatibility
+The AI-SSD execution pipeline loads models using Hugging Face's `transformers` library via `AutoModelForCausalLM.from_pretrained()`.
+
+### Download Methods:
+1. **Direct HF ID (Automatic Download)**: Passing a Hugging Face repository ID will download weights automatically into the standard Hugging Face cache (`~/.cache/huggingface/hub/`).
+2. **Local Directory (Pre-downloaded Weights)**: You can pass a local filesystem path directly to `--model /path/to/weights`.
+
+### Tested Models & Download Commands:
+
+#### 1. Qwen3-4B-Instruct-2507 (Canonical FP32)
+- **Hugging Face ID**: `Qwen/Qwen3-4B-Instruct-2507`
+- **Download CLI**:
+  ```bash
+  python -c "from transformers import AutoModelForCausalLM, AutoTokenizer; AutoTokenizer.from_pretrained('Qwen/Qwen3-4B-Instruct-2507'); AutoModelForCausalLM.from_pretrained('Qwen/Qwen3-4B-Instruct-2507', torch_dtype='auto')"
+  ```
+- **Storage Required**: ~16.0 GB on disk (FP32 safetensors)
+- **Host RAM Required**: ~18 GB RAM for CPU execution
+- **Default Precision**: `fp32`
+
+#### 2. Qwen3-8B (Canonical FP16)
+- **Hugging Face ID**: `Qwen/Qwen3-8B`
+- **Download CLI**:
+  ```bash
+  python -c "from transformers import AutoModelForCausalLM, AutoTokenizer; AutoTokenizer.from_pretrained('Qwen/Qwen3-8B'); AutoModelForCausalLM.from_pretrained('Qwen/Qwen3-8B', torch_dtype='float16')"
+  ```
+- **Storage Required**: ~16.5 GB on disk (FP16 safetensors)
+- **Host RAM Required**: ~18 GB RAM for CPU execution
+- **Default Precision**: `fp16`
+
+#### 3. Tiny-Mistral (Lightweight Verification Model)
+- **Hugging Face ID**: `openaccess-ai-collective/tiny-mistral`
+- **Download CLI**:
+  ```bash
+  python -c "from transformers import AutoModelForCausalLM, AutoTokenizer; AutoTokenizer.from_pretrained('openaccess-ai-collective/tiny-mistral'); AutoModelForCausalLM.from_pretrained('openaccess-ai-collective/tiny-mistral')"
+  ```
+- **Storage Required**: ~450 MB on disk
+- **Host RAM Required**: ~1 GB RAM
+- **Default Precision**: `fp32`
+
+---
+
+## 4. How to Add a New Model
+
+To integrate an arbitrary model family into the AI-SSD architecture-adaptive pipeline, follow these 12 steps:
+
+```text
+Step 1: Identify architecture family (Transformer, Sliding-Window, Hybrid, SSM)
+Step 2: Inspect AutoConfig via `AutoConfig.from_pretrained(model_id)`
+Step 3: Determine state type (separable KV cache vs recurrent state)
+Step 4: Determine KV tensor layout (num_layers, num_kv_heads, head_dim)
+Step 5: Determine attention geometry (MHA, GQA, or MQA)
+Step 6: Determine sliding window span (if applicable)
+Step 7: Implement or reuse `ModelAdapter` (`person1_kv_engine/adapters/model_adapter.py`)
+Step 8: Implement or reuse `StateProvider` (`person1_kv_engine/adapters/state_provider.py`)
+Step 9: Register the model in `KNOWN_MODELS` (`person1_kv_engine/adapters/registry.py`)
+Step 10: Run unit and adapter compatibility tests
+Step 11: Run numerical correctness validation against dense baseline
+Step 12: Run end-to-end performance benchmarks
+```
+
+### Files to Modify:
+1. **`person1_kv_engine/adapters/model_adapter.py`**: Add layer hooks if the model does not inherit standard Hugging Face attention patterns (`self_attn.forward`).
+2. **`person1_kv_engine/adapters/registry.py`**: Add entry to `KNOWN_MODELS` with layer count, head count, head dimension, and compatibility classification.
+3. **`tests/test_model_compatibility.py`**: Add unit tests validating config detection and adapter creation.
+
+---
+
+## 5. Model Inspection Before Inference
+
+Before downloading heavy weights or launching hardware emulation, inspect the model config using the AI-SSD CLI:
+
+### 1. List All Registered Models
 ```bash
 python scripts/demo_inference.py --list-models
 ```
 
-### Run Validated Model Benchmarks
+### 2. Inspect a Model Architecture & Compatibility
 ```bash
-# Canonical Qwen3-4B FP32 benchmark (4 CPU threads)
+# Inspect a registered model key
+python scripts/demo_inference.py --inspect-model qwen3-4b
+
+# Inspect a sliding-window Mistral model
+python scripts/demo_inference.py --inspect-model tiny-mistral
+
+# Inspect an arbitrary Hugging Face model repository ID
+python scripts/demo_inference.py --inspect-model mistralai/Mistral-7B-v0.1
+```
+
+Example Inspection Output:
+```text
+==================================================
+         AI-SSD MODEL ARCHITECTURE INSPECTION
+==================================================
+Target Model:          tiny-mistral
+Resolved Model ID:     openaccess-ai-collective/tiny-mistral
+Architecture Family:   transformer
+Architecture Type:     mistral
+Parameters:            0.21B
+Attention Type:        GQA
+Layers:                8
+Attention Heads:       16
+KV Heads:              4
+Head Dimension:        32
+Hidden Size:           512
+Sliding Window:        4096
+Default Precision:     FP32
+Compatibility Level:   FULL
+Compatibility Reason:  Validated Mistral architecture with GQA and sliding-window support
+==================================================
+```
+
+---
+
+## 6. Pre-Inference Test Checklist
+
+Before running full live inference benchmarks, ensure each verification gate passes:
+
+- [ ] **Python Environment**: Dependencies installed (`torch`, `transformers`, `pytest`, `numpy`).
+- [ ] **Model Inspectable**: `python scripts/demo_inference.py --inspect-model <model_id>` returns without errors.
+- [ ] **Unit Tests**: Full regression test suite passes (`pytest tests/`).
+- [ ] **Adapter Tests**: `pytest tests/test_model_compatibility.py` passes all 16 tests.
+- [ ] **Firmware Enable Healthy**: `./enable_ai_ssd.sh` reports `AI-SSD Firmware: ENABLED` and `Status: READY`.
+- [ ] **Firmware Disable Healthy**: `./disable_ai_ssd.sh` reports `AI-SSD Firmware: DISABLED` and `Status: STOPPED`.
+- [ ] **Idempotency Validated**: Running `./disable_ai_ssd.sh` multiple times exits cleanly with code 0.
+- [ ] **Device Present**: `/dev/nvme0n1` is accessible while enabled and unmounted while disabled.
+
+---
+
+## 7. Test Levels & Execution Hierarchy
+
+Testing must follow strict chronological levels. Never run performance benchmarks before correctness is proven.
+
+```text
+Level 1: Unit & Schema Tests
+         pytest person1_kv_engine/ person2_ssd/ person3_system/
+         Verifies KV block slicing, FTL striping math, and I/O request schemas.
+
+Level 2: Architecture & Adapter Compatibility Tests
+         pytest tests/test_model_compatibility.py
+         Verifies AutoConfig detection, GQA ratio calculation, and StateProviders.
+
+Level 3: Storage Integration & Hardware Block Roundtrip
+         pytest tests/test_nvme_block_roundtrip.py tests/test_nvme_backend_integration.py
+         Verifies real NVMe block device I/O and zero-corruption block roundtrips.
+
+Level 4: Bit-Exact Numerical Parity & Invariant Validation
+         pytest tests/test_phase9_final_validation.py
+         Verifies 16/16 exact token match and candidate_k_bytes_to_host == 0.
+
+Level 5: Live Inference Benchmark & Telemetry Profiling
+         ./enable_ai_ssd.sh
+         python scripts/demo_inference.py --model qwen3-4b --context 4096
+         ./disable_ai_ssd.sh
+         Measures wall-time latency, peak RSS memory, and flash channel balance.
+```
+
+---
+
+## 8. Canonical Pre-Inference Command Sequence
+
+Copy-paste workflow for developers and benchmark evaluators:
+
+```bash
+# 1. Verify repository status
+git status
+
+# 2. Run unit and compatibility test suite
+pytest tests/test_model_compatibility.py
+
+# 3. Inspect target model
+python scripts/demo_inference.py --inspect-model qwen3-4b
+
+# 4. Enable AI-SSD Virtual Device Firmware
+./enable_ai_ssd.sh
+
+# 5. Execute Canonical Benchmark Inference (4 CPU threads)
 python scripts/demo_inference.py --model qwen3-4b --context 4096 --decode-tokens 16 --threads 4
 
-# Canonical Qwen3-8B FP16 benchmark (4 CPU threads)
-python scripts/demo_inference.py --model qwen3-8b --context 4096 --decode-tokens 16 --threads 4
-
-# Tiny-Mistral GQA / Sliding-Window benchmark
-python scripts/demo_inference.py --model tiny-mistral --context 4096 --decode-tokens 16 --threads 4
+# 6. Verify Firmware Teardown
+./disable_ai_ssd.sh
 ```
 
-### Inspecting Unsupported Models
-If a user requests a pure state-space or unsupported model:
-```bash
-python scripts/demo_inference.py --model mamba
-```
-Output:
-```text
-[UNSUPPORTED ARCHITECTURE] Model 'mamba' cannot be executed through AI-SSD.
-Reason: Pure state-space recurrent model lacks separable KV cache for attention Top-K offload
-AI-SSD requires architectures with separable Attention Key-Value caches for Top-K offload.
-```
+---
+
+## 9. Adding a New Model — Acceptance Criteria
+
+To designate a newly added model as **`FULL`** compatibility:
+
+1. **Architecture Detection**: `ModelRegistry.detect_model_config(model_id)` must correctly extract layers, KV heads, and head dimensions.
+2. **State Separation**: Reusable sequence states must be cleanly extracted into 16-token chunks.
+3. **Storage Offload**: Key-Value blocks must be serialized into 8 KiB units (4 KiB Key + 4 KiB Value) and written to `/dev/nvme0n1`.
+4. **Computational Filtering**: Query vectors must be sent to storage, and Candidate Keys must evaluate in-controller without transferring candidate key bytes across PCIe (`candidate_k_bytes_to_host = 0 B`).
+5. **Exact Numerical Parity**: The generated token sequence across 16 decode steps must match the dense baseline 100%.
+6. **Regression Tests**: A unit test validating the model configuration must be committed to `tests/test_model_compatibility.py`.
+
+---
+
+## 10. Resource Warnings & Hardware Requirements
+
+Before running heavy models on host hardware:
+
+- **Host RAM Consumption**: Standard CPU inference loads all model weights into host memory. Qwen3-8B FP16 requires ~16.5 GB of RAM; Qwen3-4B FP32 requires ~16.0 GB of RAM.
+- **Precision Matters**: FP32 doubles weight memory and KV cache sizes compared to FP16/BF16.
+- **Context Memory Scaling**: At 32,768 tokens, an uncompressed dense KV cache consumes >30 GB of RAM. AI-SSD offloads ~80% of this state to storage, lowering process peak RSS by up to 27.9 GB.
+- **AWS Sapphire Rapids Constraints**: On memory-constrained cloud instances, verify available memory with `free -h` before loading 8B+ parameter models.
