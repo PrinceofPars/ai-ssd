@@ -210,14 +210,15 @@ def inspect_and_register_model(
 
     # Step 3: Inspect architecture
     print("\n[3/3] Inspecting architecture, tensors, and compatibility...")
-    model_type = getattr(hf_cfg, "model_type", "").lower()
-    num_layers = getattr(hf_cfg, "num_hidden_layers", 0)
-    num_attn_heads = getattr(hf_cfg, "num_attention_heads", 0)
-    num_kv_heads = getattr(hf_cfg, "num_key_value_heads", num_attn_heads)
-    hidden_size = getattr(hf_cfg, "hidden_size", 0)
-    head_dim = getattr(hf_cfg, "head_dim", (hidden_size // num_attn_heads) if num_attn_heads > 0 else 64)
-    vocab_size = getattr(hf_cfg, "vocab_size", 0)
-    sliding_window = getattr(hf_cfg, "sliding_window", None)
+    text_cfg = getattr(hf_cfg, "text_config", None) or hf_cfg
+    model_type = getattr(hf_cfg, "model_type", getattr(text_cfg, "model_type", "")).lower()
+    num_layers = getattr(text_cfg, "num_hidden_layers", 0)
+    num_attn_heads = getattr(text_cfg, "num_attention_heads", 0)
+    num_kv_heads = getattr(text_cfg, "num_key_value_heads", num_attn_heads)
+    hidden_size = getattr(text_cfg, "hidden_size", 0)
+    head_dim = getattr(text_cfg, "head_dim", (hidden_size // num_attn_heads) if num_attn_heads > 0 else 64)
+    vocab_size = getattr(text_cfg, "vocab_size", 0)
+    sliding_window = getattr(text_cfg, "sliding_window", None)
 
     # Determine attention geometry
     if num_kv_heads == 1 and num_attn_heads > 1:
