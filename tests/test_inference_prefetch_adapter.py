@@ -30,16 +30,17 @@ from person3_system.prefetch.inference_adapter import RealInferencePrefetchAdapt
 # Resilient import of Person 2's RealInferenceStorageBackend
 HAS_P2_BACKEND = False
 RealInferenceStorageBackend = None
-_p2_paths = ["/home/ubuntu/ai-ssd-p2", "/opt/ai-ssd-v2/p2"]
+_p2_paths = [
+    str(Path(__file__).resolve().parent.parent),
+    "/home/ubuntu/ai-ssd",
+    "/home/ubuntu/ai-ssd-p2",
+    "/opt/ai-ssd-v2/p2",
+]
 for _p in _p2_paths:
     if os.path.isdir(_p):
         if _p not in sys.path:
-            sys.path.append(_p)
+            sys.path.insert(0, _p)
         try:
-            import person2_ssd
-            _p2_dir = os.path.join(_p, "person2_ssd")
-            if _p2_dir not in person2_ssd.__path__:
-                person2_ssd.__path__.insert(0, _p2_dir)
             from person2_ssd.inference_backend import RealInferenceStorageBackend as _P2Cls
             RealInferenceStorageBackend = _P2Cls
             HAS_P2_BACKEND = True
@@ -50,17 +51,24 @@ for _p in _p2_paths:
 # Import P1 KVBlockAdapter if available
 HAS_P1_BLOCK_ADAPTER = False
 KVBlockAdapter = None
-p1_adapter_path = "/home/ubuntu/ai-ssd-p1/person1_kv_engine/real_llm/block_adapter.py"
-if os.path.exists(p1_adapter_path):
-    try:
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("p1_real_block_adapter", p1_adapter_path)
-        p1_mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(p1_mod)
-        KVBlockAdapter = getattr(p1_mod, "KVBlockAdapter", None)
-        HAS_P1_BLOCK_ADAPTER = KVBlockAdapter is not None
-    except Exception:
-        HAS_P1_BLOCK_ADAPTER = False
+_possible_adapter_paths = [
+    str(Path(__file__).resolve().parent.parent / "person1_kv_engine" / "real_llm" / "block_adapter.py"),
+    "/home/ubuntu/ai-ssd/person1_kv_engine/real_llm/block_adapter.py",
+    "/home/ubuntu/ai-ssd-p1/person1_kv_engine/real_llm/block_adapter.py",
+]
+for p1_adapter_path in _possible_adapter_paths:
+    if os.path.exists(p1_adapter_path):
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("p1_real_block_adapter", p1_adapter_path)
+            p1_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(p1_mod)
+            KVBlockAdapter = getattr(p1_mod, "KVBlockAdapter", None)
+            if KVBlockAdapter is not None:
+                HAS_P1_BLOCK_ADAPTER = True
+                break
+        except Exception:
+            pass
 
 
 # =============================================================================
