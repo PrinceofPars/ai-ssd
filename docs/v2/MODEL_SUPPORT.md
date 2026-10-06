@@ -66,7 +66,7 @@ The following models are verified and registered in `person1_kv_engine/adapters/
 | `qwen3-8b` | `Qwen/Qwen3-8B` | Transformer (Qwen2) | FP16 | GQA (32:8) | `TransformerKVStateProvider` | **`FULL`** | Verified (4K–16K) |
 | `qwen2.5-0.5b` | `Qwen/Qwen2.5-0.5B` | Transformer (Qwen2) | FP32 | GQA (14:2) | `TransformerKVStateProvider` | **`FULL`** | Verified (512–4K) |
 | `qwen3.5-4b` | `Qwen/Qwen3.5-4B-Instruct` | Transformer (Qwen2) | FP32 | GQA (16:4) | `TransformerKVStateProvider` | **`FULL`** | Architecture Ready |
-| `qwen3.5-9b` | `Qwen/Qwen3.5-9B` | Hybrid (Linear SSM + GQA) | FP16 | Hybrid (24 SSM : 8 GQA) | N/A | **`UNSUPPORTED`** | Incompatible (75% SSM) |
+| `qwen3.5-9b` | `Qwen/Qwen3.5-9B` | Hybrid (Linear SSM + GQA) | FP16 | Hybrid (24 SSM : 8 GQA) | `HybridStateProvider` (`HybridQwen35Adapter`) | **`PARTIAL`** | Verified (8 GQA offloaded, 24 SSM resident) |
 | `tiny-mistral` | `openaccess-ai-collective/tiny-mistral` | Transformer (Mistral) | FP32 / FP16 | GQA (16:4) + Sliding | `SlidingWindowKVStateProvider` | **`FULL`** | Verified (Unit/E2E) |
 | `mistral-7b` | `mistralai/Mistral-7B-v0.1` | Transformer (Mistral) | FP16 | GQA (32:8) + Sliding | `SlidingWindowKVStateProvider` | **`FULL`** | Architecture Ready |
 | `jamba` | `ai21labs/AI21-Jamba-1.5-Mini` | Hybrid (Transformer + SSM) | FP16 | GQA (32:8) + Mamba | `HybridStateProvider` | **`PARTIAL`** | Architecture Ready |
@@ -115,6 +115,22 @@ The AI-SSD execution pipeline loads models using Hugging Face's `transformers` l
 - **Storage Required**: ~450 MB on disk
 - **Host RAM Required**: ~1 GB RAM
 - **Default Precision**: `fp32`
+
+#### 4. Qwen3.5-9B (Hybrid Attention + DeltaNet SSM)
+- **Hugging Face ID**: `Qwen/Qwen3.5-9B`
+- **Compatibility Tier**: **`PARTIAL`**
+- **Architecture**: `HybridQwen35Adapter`
+- **Geometry**: 32 hidden layers (8 full GQA Attention layers + 24 linear attention / DeltaNet SSM recurrent layers), 16 query heads, 4 KV heads, head dimension 256, partial rotary factor 0.25 (first 64 dimensions rotated), sigmoid attention output gating.
+- **Offload Mechanism**:
+  - **Full Attention Layers (3, 7, 11, 15, 19, 23, 27, 31)**: Key-Value activation pages are serialized into 16-token flash blocks and offloaded to AI-SSD flash storage. Under computational storage, candidate Key filtering evaluates in storage (`candidate_k_bytes_to_host = 0 B`).
+  - **Linear Attention / SSM Layers (0–2, 4–6, 8–10, 12–14, 16–18, 20–22, 24–26, 28–30)**: Compact recurrent and convolution hidden states remain resident in Host DRAM.
+- **Download CLI**:
+  ```bash
+  python -c "from transformers import AutoModelForCausalLM, AutoTokenizer; AutoTokenizer.from_pretrained('Qwen/Qwen3.5-9B'); AutoModelForCausalLM.from_pretrained('Qwen/Qwen3.5-9B', torch_dtype='float16')"
+  ```
+- **Storage Required**: ~19.3 GB on disk (FP16 safetensors)
+- **Host RAM Required**: ~18 GB RAM for CPU execution
+- **Default Precision**: `fp16`
 
 ---
 
