@@ -57,3 +57,10 @@ results/figures/*
 !results/figures/.gitkeep
 results/tables/*
 !results/tables/.gitkeep
+
+# Profiling and temporary logs
+*.log
+/tmp/
+*.prof
+decode_profile.txt
+decode_profile.json
