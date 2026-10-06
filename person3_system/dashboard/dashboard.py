@@ -124,11 +124,11 @@ def fmt_val(val: Any, unit: str = "", fmt: str = ".2f") -> str:
         return str(val)
 
 
-def render_threejs_bar_chart(title: str, labels: list, values: list, colors: list, y_unit: str = "", height: int = 340):
+def render_threejs_bar_chart(title: str, labels: list, values: list, colors: list, y_unit: str = "", height: int = 320):
     """
-    Renders an interactive 3D WebGL bar chart using Three.js.
-    Features: smooth 3D perspective, interactive mouse hover detection via raycasting,
-    hover glow animation, dynamic HTML tooltip with live coordinates, and smooth lighting.
+    Renders a crisp, modern 2D interactive bar chart using Three.js with an OrthographicCamera.
+    Features: 2D flat presentation, hover detection via raycasting, color highlight,
+    interactive tooltip displaying precise values, baseline grid axes, and clean typography.
     """
     labels_json = json.dumps(labels)
     values_json = json.dumps([float(v) for v in values])
@@ -154,11 +154,11 @@ def render_threejs_bar_chart(title: str, labels: list, values: list, colors: lis
         }}
         #chart-title {{
           position: absolute;
-          top: 12px;
-          left: 18px;
+          top: 10px;
+          left: 16px;
           color: #E8EAED;
           font-weight: 700;
-          font-size: 14px;
+          font-size: 13px;
           letter-spacing: 0.3px;
           z-index: 10;
           pointer-events: none;
@@ -166,35 +166,45 @@ def render_threejs_bar_chart(title: str, labels: list, values: list, colors: lis
         #tooltip {{
           position: absolute;
           display: none;
-          background: rgba(32, 33, 36, 0.94);
+          background: rgba(30, 31, 35, 0.96);
           color: #FFFFFF;
-          padding: 8px 12px;
+          padding: 7px 11px;
           border-radius: 6px;
           font-size: 12px;
           font-weight: 600;
           pointer-events: none;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-          border: 1px solid rgba(255,255,255,0.15);
+          box-shadow: 0 4px 14px rgba(0,0,0,0.6);
+          border: 1px solid rgba(255,255,255,0.18);
           z-index: 20;
           transform: translate(-50%, -125%);
-          transition: opacity 0.15s ease, transform 0.1s ease;
           white-space: nowrap;
         }}
         #tooltip .val {{
           color: #8AB4F8;
           font-size: 13px;
+          margin-top: 2px;
         }}
-        #badge-3d {{
+        #badge-mode {{
           position: absolute;
           bottom: 8px;
           right: 12px;
-          background: rgba(26, 115, 232, 0.2);
-          border: 1px solid rgba(26, 115, 232, 0.5);
+          background: rgba(26, 115, 232, 0.15);
+          border: 1px solid rgba(26, 115, 232, 0.4);
           color: #8AB4F8;
           font-size: 10px;
           font-weight: 700;
           padding: 2px 7px;
           border-radius: 4px;
+          pointer-events: none;
+        }}
+        .x-label {{
+          position: absolute;
+          bottom: 6px;
+          color: #9AA0A6;
+          font-size: 10.5px;
+          font-weight: 600;
+          text-align: center;
+          transform: translateX(-50%);
           pointer-events: none;
         }}
       </style>
@@ -204,7 +214,7 @@ def render_threejs_bar_chart(title: str, labels: list, values: list, colors: lis
       <div id="container">
         <div id="chart-title">{title}</div>
         <div id="tooltip"></div>
-        <div id="badge-3d">Three.js 3D Interactive Hover</div>
+        <div id="badge-mode">Three.js 2D Interactive Hover</div>
       </div>
       <script>
         const container = document.getElementById('container');
@@ -217,100 +227,99 @@ def render_threejs_bar_chart(title: str, labels: list, values: list, colors: lis
         const width = container.clientWidth || 600;
         const height = {height};
 
-        // Scene & Camera
+        // 2D Scene & Orthographic Camera
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x0e1117);
 
-        const camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 1000);
-        camera.position.set(0, 14, 28);
-        camera.lookAt(0, 4, 0);
+        // Map world coordinates: width [-W/2, W/2], height [0, H]
+        const viewW = 100;
+        const aspect = width / height;
+        const viewH = viewW / aspect;
+        const camera = new THREE.OrthographicCamera(-viewW/2, viewW/2, viewH, 0, 0.1, 100);
+        camera.position.set(0, 0, 10);
+        camera.lookAt(0, 0, 0);
 
-        // Renderer
         const renderer = new THREE.WebGLRenderer({{ antialias: true, alpha: true }});
         renderer.setSize(width, height);
         renderer.setPixelRatio(window.devicePixelRatio);
-        renderer.shadowMap.enabled = true;
-        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         container.appendChild(renderer.domElement);
 
-        // Lights
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
-        scene.add(ambientLight);
+        // Chart dimensions in world units
+        const marginL = -viewW/2 + 8;
+        const marginR = viewW/2 - 8;
+        const chartW = marginR - marginL;
+        const baseBottom = 8;
+        const chartH = viewH - 22;
 
-        const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
-        dirLight.position.set(15, 30, 20);
-        dirLight.castShadow = true;
-        dirLight.shadow.mapSize.width = 1024;
-        dirLight.shadow.mapSize.height = 1024;
-        scene.add(dirLight);
+        // Baseline Axis line
+        const axisGeo = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(marginL, baseBottom, 0),
+          new THREE.Vector3(marginR, baseBottom, 0)
+        ]);
+        const axisMat = new THREE.LineBasicMaterial({{ color: 0x3c4043, linewidth: 2 }});
+        scene.add(new THREE.Line(axisGeo, axisMat));
 
-        const pointLight = new THREE.PointLight(0x4285f4, 1.2, 50);
-        pointLight.position.set(-10, 15, 10);
-        scene.add(pointLight);
+        // Horizontal Gridlines
+        for (let g = 1; g <= 4; g++) {{
+          const yGrid = baseBottom + (chartH * (g / 4));
+          const gridGeo = new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(marginL, yGrid, 0),
+            new THREE.Vector3(marginR, yGrid, 0)
+          ]);
+          const gridMat = new THREE.LineBasicMaterial({{ color: 0x20242a }});
+          scene.add(new THREE.Line(gridGeo, gridMat));
+        }}
 
-        // Ground Plane (Soft grid reflection)
-        const planeGeo = new THREE.PlaneGeometry(60, 30);
-        const planeMat = new THREE.MeshStandardMaterial({{ color: 0x161b22, roughness: 0.9, metalness: 0.1 }});
-        const plane = new THREE.Mesh(planeGeo, planeMat);
-        plane.rotation.x = -Math.PI / 2;
-        plane.position.y = -0.05;
-        plane.receiveShadow = true;
-        scene.add(plane);
-
-        // Grid Helper
-        const grid = new THREE.GridHelper(50, 25, 0x30363d, 0x21262d);
-        grid.position.y = 0;
-        scene.add(grid);
-
-        // Data normalization
         const maxVal = Math.max(...values, 0.001);
-        const maxHeight = 10;
         const n = labels.length;
-        const barSpacing = Math.min(2.8, 32 / Math.max(n, 1));
-        const barWidth = barSpacing * 0.65;
-        const startX = -((n - 1) * barSpacing) / 2;
+        const slotW = chartW / n;
+        const barW = slotW * 0.58;
 
-        const bars = [];
         const barMeshes = [];
 
         labels.forEach((label, i) => {{
           const val = values[i];
-          const normH = Math.max(0.15, (val / maxVal) * maxHeight);
+          const barH = Math.max(0.6, (val / maxVal) * chartH);
           const colHex = rawColors[i % rawColors.length] || '#1A73E8';
           const baseColor = new THREE.Color(colHex);
 
-          const geo = new THREE.BoxGeometry(barWidth, normH, barWidth);
-          const mat = new THREE.MeshStandardMaterial({{
+          // 2D Plane Geometry for flat bar
+          const geo = new THREE.PlaneGeometry(barW, barH);
+          const mat = new THREE.MeshBasicMaterial({{
             color: baseColor,
-            roughness: 0.25,
-            metalness: 0.35,
-            emissive: 0x000000,
-            emissiveIntensity: 0.0
+            side: THREE.DoubleSide
           }});
 
           const mesh = new THREE.Mesh(geo, mat);
-          mesh.position.set(startX + i * barSpacing, normH / 2, 0);
-          mesh.castShadow = true;
-          mesh.receiveShadow = true;
-          
+          const cx = marginL + i * slotW + slotW / 2;
+          const cy = baseBottom + barH / 2;
+          mesh.position.set(cx, cy, 0.1);
+
           mesh.userData = {{
             index: i,
             label: label,
             value: val,
             baseColor: baseColor,
-            initialY: normH / 2,
-            normH: normH
+            barH: barH,
+            cx: cx
           }};
 
           scene.add(mesh);
-          bars.push(mesh);
           barMeshes.push(mesh);
+
+          // DOM X-Axis Label
+          const lblDiv = document.createElement('div');
+          lblDiv.className = 'x-label';
+          const screenX = ((cx - (-viewW/2)) / viewW) * width;
+          lblDiv.style.left = screenX + 'px';
+          lblDiv.innerText = label;
+          container.appendChild(lblDiv);
         }});
 
-        // Raycasting for interactive hover
+        // Raycasting for 2D Interactive Hover
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2(-999, -999);
-        let hoveredBar = null;
+        let hovered = null;
 
         function onMouseMove(event) {{
           const rect = container.getBoundingClientRect();
@@ -322,72 +331,353 @@ def render_threejs_bar_chart(title: str, labels: list, values: list, colors: lis
 
           if (intersects.length > 0) {{
             const hit = intersects[0].object;
-            if (hoveredBar !== hit) {{
-              if (hoveredBar) resetBar(hoveredBar);
-              hoveredBar = hit;
-              highlightBar(hoveredBar);
+            if (hovered !== hit) {{
+              if (hovered) resetBar(hovered);
+              hovered = hit;
+              highlightBar(hovered);
             }}
             tooltip.style.display = 'block';
             tooltip.style.left = (event.clientX - rect.left) + 'px';
             tooltip.style.top = (event.clientY - rect.top) + 'px';
-            const d = hoveredBar.userData;
+            const d = hovered.userData;
             const formattedVal = (d.value % 1 === 0) ? d.value.toLocaleString() : d.value.toFixed(2);
             tooltip.innerHTML = `<div>${{d.label}}</div><div class="val">${{formattedVal}} ${{yUnit}}</div>`;
           }} else {{
-            if (hoveredBar) {{
-              resetBar(hoveredBar);
-              hoveredBar = null;
+            if (hovered) {{
+              resetBar(hovered);
+              hovered = null;
             }}
             tooltip.style.display = 'none';
           }}
         }}
 
-        function highlightBar(bar) {{
-          bar.material.emissive.copy(bar.userData.baseColor);
-          bar.material.emissiveIntensity = 0.55;
-          bar.scale.set(1.12, 1.05, 1.12);
+        function highlightBar(mesh) {{
+          mesh.material.color.set(0xFFFFFF);
+          mesh.scale.set(1.05, 1.02, 1);
         }}
 
-        function resetBar(bar) {{
-          bar.material.emissiveIntensity = 0.0;
-          bar.scale.set(1.0, 1.0, 1.0);
+        function resetBar(mesh) {{
+          mesh.material.color.copy(mesh.userData.baseColor);
+          mesh.scale.set(1.0, 1.0, 1);
         }}
 
         container.addEventListener('mousemove', onMouseMove);
         container.addEventListener('mouseleave', () => {{
-          if (hoveredBar) resetBar(hoveredBar);
-          hoveredBar = null;
+          if (hovered) resetBar(hovered);
+          hovered = null;
           tooltip.style.display = 'none';
         }});
 
-        // Animation Loop
-        let targetRotY = 0;
-        function animate() {{
-          requestAnimationFrame(animate);
-
-          // Subtle interactive parallax based on mouse
-          if (mouse.x > -2) {{
-            camera.position.x += (mouse.x * 3.5 - camera.position.x) * 0.05;
-            camera.position.y += ((14 - mouse.y * 2) - camera.position.y) * 0.05;
-            camera.lookAt(0, 4, 0);
-          }}
-
+        function render() {{
           renderer.render(scene, camera);
+          requestAnimationFrame(render);
         }}
-        animate();
+        render();
 
-        // Responsive Resize
         window.addEventListener('resize', () => {{
           const newW = container.clientWidth || 600;
-          camera.aspect = newW / height;
-          camera.updateProjectionMatrix();
           renderer.setSize(newW, height);
         }});
       </script>
     </body>
     </html>
     """
-    components.html(html_code, height=height + 10)
+    components.html(html_code, height=height + 8)
+
+
+def render_threejs_line_chart(title: str, x_labels: list, series_list: list, y_unit: str = "", height: int = 320):
+    """
+    Renders a crisp 2D multi-series line chart with interactive point hover tooltips using Three.js.
+    series_list format: [{'name': 'Series A', 'values': [...], 'color': '#EA4335', 'dash': False}]
+    """
+    x_json = json.dumps([str(x) for x in x_labels])
+    series_json = json.dumps(series_list)
+    
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        body {{
+          margin: 0;
+          overflow: hidden;
+          background: #0E1117;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          user-select: none;
+        }}
+        #container {{
+          width: 100%;
+          height: {height}px;
+          position: relative;
+        }}
+        #chart-title {{
+          position: absolute;
+          top: 10px;
+          left: 16px;
+          color: #E8EAED;
+          font-weight: 700;
+          font-size: 13px;
+          letter-spacing: 0.3px;
+          z-index: 10;
+          pointer-events: none;
+        }}
+        #legend {{
+          position: absolute;
+          top: 10px;
+          right: 16px;
+          display: flex;
+          gap: 14px;
+          z-index: 10;
+          font-size: 11px;
+          color: #E8EAED;
+          font-weight: 600;
+        }}
+        .legend-item {{
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }}
+        .legend-color {{
+          width: 10px;
+          height: 10px;
+          border-radius: 2px;
+        }}
+        #tooltip {{
+          position: absolute;
+          display: none;
+          background: rgba(30, 31, 35, 0.96);
+          color: #FFFFFF;
+          padding: 7px 11px;
+          border-radius: 6px;
+          font-size: 12px;
+          font-weight: 600;
+          pointer-events: none;
+          box-shadow: 0 4px 14px rgba(0,0,0,0.6);
+          border: 1px solid rgba(255,255,255,0.18);
+          z-index: 20;
+          transform: translate(-50%, -125%);
+          white-space: nowrap;
+        }}
+        #tooltip .val {{
+          color: #8AB4F8;
+          font-size: 13px;
+          margin-top: 2px;
+        }}
+        #badge-mode {{
+          position: absolute;
+          bottom: 8px;
+          right: 12px;
+          background: rgba(26, 115, 232, 0.15);
+          border: 1px solid rgba(26, 115, 232, 0.4);
+          color: #8AB4F8;
+          font-size: 10px;
+          font-weight: 700;
+          padding: 2px 7px;
+          border-radius: 4px;
+          pointer-events: none;
+        }}
+        .x-label {{
+          position: absolute;
+          bottom: 6px;
+          color: #9AA0A6;
+          font-size: 10.5px;
+          font-weight: 600;
+          text-align: center;
+          transform: translateX(-50%);
+          pointer-events: none;
+        }}
+      </style>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    </head>
+    <body>
+      <div id="container">
+        <div id="chart-title">{title}</div>
+        <div id="legend"></div>
+        <div id="tooltip"></div>
+        <div id="badge-mode">Three.js 2D Interactive Hover</div>
+      </div>
+      <script>
+        const container = document.getElementById('container');
+        const tooltip = document.getElementById('tooltip');
+        const legend = document.getElementById('legend');
+        const xLabels = {x_json};
+        const series = {series_json};
+        const yUnit = "{y_unit}";
+
+        const width = container.clientWidth || 600;
+        const height = {height};
+
+        // Populate Legend
+        series.forEach(s => {{
+          const item = document.createElement('div');
+          item.className = 'legend-item';
+          item.innerHTML = `<div class="legend-color" style="background:${{s.color}}"></div><div>${{s.name}}</div>`;
+          legend.appendChild(item);
+        }});
+
+        // 2D Scene & Orthographic Camera
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0e1117);
+
+        const viewW = 100;
+        const aspect = width / height;
+        const viewH = viewW / aspect;
+        const camera = new THREE.OrthographicCamera(-viewW/2, viewW/2, viewH, 0, 0.1, 100);
+        camera.position.set(0, 0, 10);
+        camera.lookAt(0, 0, 0);
+
+        const renderer = new THREE.WebGLRenderer({{ antialias: true, alpha: true }});
+        renderer.setSize(width, height);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        container.appendChild(renderer.domElement);
+
+        const marginL = -viewW/2 + 10;
+        const marginR = viewW/2 - 10;
+        const chartW = marginR - marginL;
+        const baseBottom = 8;
+        const chartH = viewH - 24;
+
+        // Baseline Axis
+        const axisGeo = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(marginL, baseBottom, 0),
+          new THREE.Vector3(marginR, baseBottom, 0)
+        ]);
+        const axisMat = new THREE.LineBasicMaterial({{ color: 0x3c4043 }});
+        scene.add(new THREE.Line(axisGeo, axisMat));
+
+        // Horizontal Gridlines
+        for (let g = 1; g <= 4; g++) {{
+          const yGrid = baseBottom + (chartH * (g / 4));
+          const gridGeo = new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(marginL, yGrid, 0),
+            new THREE.Vector3(marginR, yGrid, 0)
+          ]);
+          const gridMat = new THREE.LineBasicMaterial({{ color: 0x20242a }});
+          scene.add(new THREE.Line(gridGeo, gridMat));
+        }}
+
+        // Calculate Global Max Value
+        let allVals = [];
+        series.forEach(s => s.values.forEach(v => allVals.push(v)));
+        const maxVal = Math.max(...allVals, 0.001);
+
+        const n = xLabels.length;
+        const xStep = chartW / Math.max(n - 1, 1);
+
+        // Render X Labels
+        xLabels.forEach((xl, i) => {{
+          const cx = marginL + i * xStep;
+          const lblDiv = document.createElement('div');
+          lblDiv.className = 'x-label';
+          const screenX = ((cx - (-viewW/2)) / viewW) * width;
+          lblDiv.style.left = screenX + 'px';
+          lblDiv.innerText = xl;
+          container.appendChild(lblDiv);
+        }});
+
+        const pointMeshes = [];
+
+        // Draw Lines & Data Points
+        series.forEach(s => {{
+          const points = [];
+          const colorObj = new THREE.Color(s.color);
+
+          s.values.forEach((val, i) => {{
+            const cx = marginL + i * xStep;
+            const cy = baseBottom + (val / maxVal) * chartH;
+            points.push(new THREE.Vector3(cx, cy, 0.1));
+
+            // Interactive Point Disc
+            const pGeo = new THREE.CircleGeometry(1.0, 16);
+            const pMat = new THREE.MeshBasicMaterial({{ color: colorObj }});
+            const pMesh = new THREE.Mesh(pGeo, pMat);
+            pMesh.position.set(cx, cy, 0.2);
+
+            pMesh.userData = {{
+              seriesName: s.name,
+              xLabel: xLabels[i],
+              value: val,
+              baseColor: colorObj
+            }};
+
+            scene.add(pMesh);
+            pointMeshes.push(pMesh);
+          }});
+
+          const lineGeo = new THREE.BufferGeometry().setFromPoints(points);
+          const lineMat = new THREE.LineBasicMaterial({{ color: colorObj, linewidth: 2 }});
+          scene.add(new THREE.Line(lineGeo, lineMat));
+        }});
+
+        // Raycasting for point hover
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2(-999, -999);
+        let hovered = null;
+
+        function onMouseMove(event) {{
+          const rect = container.getBoundingClientRect();
+          mouse.x = ((event.clientX - rect.left) / width) * 2 - 1;
+          mouse.y = -((event.clientY - rect.top) / height) * 2 + 1;
+
+          raycaster.setFromCamera(mouse, camera);
+          const intersects = raycaster.intersectObjects(pointMeshes);
+
+          if (intersects.length > 0) {{
+            const hit = intersects[0].object;
+            if (hovered !== hit) {{
+              if (hovered) resetPoint(hovered);
+              hovered = hit;
+              highlightPoint(hovered);
+            }}
+            tooltip.style.display = 'block';
+            tooltip.style.left = (event.clientX - rect.left) + 'px';
+            tooltip.style.top = (event.clientY - rect.top) + 'px';
+            const d = hovered.userData;
+            const formattedVal = (d.value % 1 === 0) ? d.value.toLocaleString() : d.value.toFixed(2);
+            tooltip.innerHTML = `<div>${{d.seriesName}} @ ${{d.xLabel}}</div><div class="val">${{formattedVal}} ${{yUnit}}</div>`;
+          }} else {{
+            if (hovered) {{
+              resetPoint(hovered);
+              hovered = null;
+            }}
+            tooltip.style.display = 'none';
+          }}
+        }}
+
+        function highlightPoint(mesh) {{
+          mesh.material.color.set(0xFFFFFF);
+          mesh.scale.set(1.8, 1.8, 1);
+        }}
+
+        function resetPoint(mesh) {{
+          mesh.material.color.copy(mesh.userData.baseColor);
+          mesh.scale.set(1.0, 1.0, 1);
+        }}
+
+        container.addEventListener('mousemove', onMouseMove);
+        container.addEventListener('mouseleave', () => {{
+          if (hovered) resetPoint(hovered);
+          hovered = null;
+          tooltip.style.display = 'none';
+        }});
+
+        function render() {{
+          renderer.render(scene, camera);
+          requestAnimationFrame(render);
+        }}
+        render();
+
+        window.addEventListener('resize', () => {{
+          const newW = container.clientWidth || 600;
+          renderer.setSize(newW, height);
+        }});
+      </script>
+    </body>
+    </html>
+    """
+    components.html(html_code, height=height + 8)
+
 
 
 
@@ -988,36 +1278,37 @@ elif selected_section == "8. Context Scaling":
 
     st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
-    st.markdown("#### Context Scaling Curves")
+    st.markdown("#### Context Scaling Curves (Interactive 2D Hover)")
     cs1, cs2 = st.columns(2)
+    ctx_x = [4096, 8192, 16384, 32768]
+    dense_rss_pts = [ctx_data.get(str(x), {}).get("baseline", {}).get("peak_rss_mb", 0) for x in ctx_x]
+    aissd_rss_pts = [ctx_data.get(str(x), {}).get("aissd", {}).get("peak_rss_mb", 0) for x in ctx_x]
+    dense_kv_pts = [ctx_data.get(str(x), {}).get("baseline", {}).get("active_kv_mb", 0) for x in ctx_x]
+    aissd_kv_pts = [ctx_data.get(str(x), {}).get("aissd", {}).get("active_kv_mb", 0) for x in ctx_x]
+
     with cs1:
-        fig1, ax1 = plt.subplots(figsize=(6, 3.8))
-        ctx_x = [4096, 8192, 16384, 32768]
-        dense_rss_pts = [ctx_data.get(str(x), {}).get("baseline", {}).get("peak_rss_mb", 0) for x in ctx_x]
-        aissd_rss_pts = [ctx_data.get(str(x), {}).get("aissd", {}).get("peak_rss_mb", 0) for x in ctx_x]
-        
-        ax1.plot(ctx_x, dense_rss_pts, 'o--', color='#EA4335', label='Dense Baseline Peak RSS', linewidth=2)
-        ax1.plot(ctx_x, aissd_rss_pts, 's-', color='#1A73E8', label='AI-SSD Peak RSS', linewidth=2)
-        ax1.set_xlabel('Context Length (tokens)', fontsize=10)
-        ax1.set_ylabel('Host Peak RSS (MB)', fontsize=10)
-        ax1.set_title('Host Memory Bound: Dense Explosion vs Flat AI-SSD', fontweight='bold', fontsize=11)
-        ax1.legend()
-        ax1.grid(True, linestyle=':', alpha=0.6)
-        st.pyplot(fig1)
+        render_threejs_line_chart(
+            title="Host Peak RSS: Dense Explosion vs Flat AI-SSD",
+            x_labels=["4K", "8K", "16K", "32K"],
+            series_list=[
+                {"name": "Dense Baseline RSS", "values": dense_rss_pts, "color": "#EA4335"},
+                {"name": "AI-SSD Peak RSS", "values": aissd_rss_pts, "color": "#1A73E8"}
+            ],
+            y_unit="MB",
+            height=300
+        )
 
     with cs2:
-        fig2, ax2 = plt.subplots(figsize=(6, 3.8))
-        dense_kv_pts = [ctx_data.get(str(x), {}).get("baseline", {}).get("active_kv_mb", 0) for x in ctx_x]
-        aissd_kv_pts = [ctx_data.get(str(x), {}).get("aissd", {}).get("active_kv_mb", 0) for x in ctx_x]
-        
-        ax2.plot(ctx_x, dense_kv_pts, 'o--', color='#EA4335', label='Dense Baseline KV', linewidth=2)
-        ax2.plot(ctx_x, aissd_kv_pts, 's-', color='#34A853', label='AI-SSD Active KV in DRAM', linewidth=2)
-        ax2.set_xlabel('Context Length (tokens)', fontsize=10)
-        ax2.set_ylabel('Active KV in DRAM (MB)', fontsize=10)
-        ax2.set_title('DRAM Footprint: 89.9% Linear Scaling Suppression', fontweight='bold', fontsize=11)
-        ax2.legend()
-        ax2.grid(True, linestyle=':', alpha=0.6)
-        st.pyplot(fig2)
+        render_threejs_line_chart(
+            title="Active KV in DRAM: 89.9% Suppression",
+            x_labels=["4K", "8K", "16K", "32K"],
+            series_list=[
+                {"name": "Dense Baseline KV", "values": dense_kv_pts, "color": "#EA4335"},
+                {"name": "AI-SSD Active KV", "values": aissd_kv_pts, "color": "#34A853"}
+            ],
+            y_unit="MB",
+            height=300
+        )
 
 
 # =====================================================================
