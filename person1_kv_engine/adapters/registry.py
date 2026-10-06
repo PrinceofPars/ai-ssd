@@ -149,21 +149,22 @@ KNOWN_MODELS: Dict[str, Dict[str, Any]] = {
     },
     "qwen3.5-9b": {
         "model_id": "Qwen/Qwen3.5-9B",
-        "architecture": "qwen2",
-        "model_family": "transformer",
-        "params": "9.0B",
+        "architecture": "qwen3_5",
+        "model_family": "hybrid_recurrent",
+        "params": "9.7B",
         "default_precision": "fp16",
-        "supported_precisions": ["fp16", "float16", "fp32", "float32"],
+        "supported_precisions": ["fp16", "float16"],
         "supported_contexts": [512, 1024, 2048, 4096, 8192],
-        "attention_type": "GQA",
+        "attention_type": "Hybrid (24 Linear SSM + 8 Full GQA)",
         "num_layers": 32,
         "num_attention_heads": 16,
         "num_key_value_heads": 4,
         "head_dim": 256,
         "hidden_size": 4096,
         "vocab_size": 248320,
-        "compatibility_level": CompatibilityLevel.FULL,
-        "compatibility_reason": "Qwen 3.5 9B GQA architecture supported via QwenAdapter",
+        "has_separable_kv_cache": False,
+        "compatibility_level": CompatibilityLevel.UNSUPPORTED,
+        "compatibility_reason": "Hybrid architecture: 24 of 32 layers are linear attention (SSM) lacking separable KV caches for SSD Top-K offload. Use qwen3-8b for 8B-scale FP16 benchmarks.",
     },
     "tiny-mistral": {
         "model_id": "openaccess-ai-collective/tiny-mistral",
@@ -355,10 +356,14 @@ class ModelRegistry:
             attn_type = "MHA"
 
         # Determine compatibility
-        if model_type in ("qwen2", "qwen", "qwen3", "qwen3_5", "mistral", "llama"):
+        if model_type in ("qwen2", "qwen", "qwen3", "mistral", "llama"):
             comp_level = CompatibilityLevel.FULL
             reason = f"Supported {model_type.upper()} Transformer architecture ({attn_type})"
             family = "transformer"
+        elif model_type in ("qwen3_5",):
+            comp_level = CompatibilityLevel.UNSUPPORTED
+            reason = f"Hybrid architecture ({model_type}): 75% of layers are linear attention (DeltaNet/SSM) lacking separable KV caches for SSD Top-K offload. Use qwen3-8b for 8B-scale benchmarks."
+            family = "hybrid_recurrent"
         elif model_type in ("jamba",):
             comp_level = CompatibilityLevel.PARTIAL
             reason = "Hybrid Attention + Mamba architecture: Attention KV offloaded to AI-SSD, SSM resident in DRAM"

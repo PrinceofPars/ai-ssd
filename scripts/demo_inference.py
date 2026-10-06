@@ -122,7 +122,12 @@ def parse_arguments() -> Optional[argparse.Namespace]:
     if comp_level == CompatibilityLevel.UNSUPPORTED:
         print(f"\n[UNSUPPORTED ARCHITECTURE] Model '{model_key}' cannot be executed through AI-SSD.")
         print(f"Reason: {comp_reason}")
-        print("AI-SSD requires architectures with separable Attention Key-Value caches for Top-K offload.\n")
+        print("AI-SSD requires architectures with separable Attention Key-Value caches for Top-K offload.")
+        print("\nRecommended fully supported models:")
+        print("  • qwen3-8b     (Canonical FP16 benchmark, 8.19B)")
+        print("  • qwen3-4b     (Canonical FP32 benchmark, 4.02B)")
+        print("  • qwen2.5-0.5b (Fast development model, 0.49B)")
+        print("  • tiny-mistral (Unit test benchmark, 0.21B)\n")
         sys.exit(1)
 
     # Resolve and validate precision

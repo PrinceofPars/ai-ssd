@@ -232,11 +232,16 @@ def inspect_and_register_model(
     chosen_precision = (precision or "fp16").lower()
 
     # Determine compatibility
-    if model_type in ("qwen", "qwen2", "qwen3", "qwen3_5"):
+    if model_type in ("qwen", "qwen2", "qwen3"):
         comp_level = CompatibilityLevel.FULL
         comp_reason = f"Supported QWEN Transformer architecture ({attn_type}) via QwenAdapter"
         family = "transformer"
         arch_type = "qwen2"
+    elif model_type in ("qwen3_5",):
+        comp_level = CompatibilityLevel.UNSUPPORTED
+        comp_reason = f"Hybrid architecture ({model_type}): 75% of layers are linear attention (DeltaNet/SSM) lacking separable KV caches for SSD Top-K offload. Use qwen3-8b for 8B-scale benchmarks."
+        family = "hybrid_recurrent"
+        arch_type = "qwen3_5"
     elif model_type in ("mistral", "llama", "llama2", "llama3"):
         comp_level = CompatibilityLevel.FULL
         comp_reason = f"Supported {model_type.upper()} Transformer architecture ({attn_type}) via MistralAdapter"

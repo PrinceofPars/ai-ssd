@@ -239,7 +239,7 @@ AI-SSD V2 provides an architecture-adaptive state management abstraction (`Model
 | **`qwen3-8b`** | `Qwen/Qwen3-8B` | Qwen2 | GQA (4:1) | `TransformerKVStateProvider` | **`FULL`** |
 | **`qwen2.5-0.5b`** | `Qwen/Qwen2.5-0.5B` | Qwen2 | GQA (7:1) | `TransformerKVStateProvider` | **`FULL`** |
 | **`qwen3.5-4b`** | `Qwen/Qwen3.5-4B-Instruct` | Qwen2 | GQA (4:1) | `TransformerKVStateProvider` | **`FULL`** |
-| **`qwen3.5-9b`** | `Qwen/Qwen3.5-9B` | Qwen2 | GQA (4:1) | `TransformerKVStateProvider` | **`FULL`** |
+| **`qwen3.5-9b`** | `Qwen/Qwen3.5-9B` | Qwen3.5 Hybrid | Hybrid (24 SSM : 8 GQA) | N/A (75% SSM) | **`UNSUPPORTED`** |
 | **`tiny-mistral`** | `openaccess-ai-collective/tiny-mistral` | Mistral | GQA + Sliding | `SlidingWindowKVStateProvider` | **`FULL`** |
 | **`mistral-7b`** | `mistralai/Mistral-7B-v0.1` | Mistral | GQA + Sliding | `SlidingWindowKVStateProvider` | **`FULL`** |
 | **`jamba`** | `ai21labs/AI21-Jamba-1.5-Mini` | Jamba | Hybrid GQA + Mamba | `HybridStateProvider` | **`PARTIAL`** |

@@ -66,7 +66,7 @@ The following models are verified and registered in `person1_kv_engine/adapters/
 | `qwen3-8b` | `Qwen/Qwen3-8B` | Transformer (Qwen2) | FP16 | GQA (32:8) | `TransformerKVStateProvider` | **`FULL`** | Verified (4K–16K) |
 | `qwen2.5-0.5b` | `Qwen/Qwen2.5-0.5B` | Transformer (Qwen2) | FP32 | GQA (14:2) | `TransformerKVStateProvider` | **`FULL`** | Verified (512–4K) |
 | `qwen3.5-4b` | `Qwen/Qwen3.5-4B-Instruct` | Transformer (Qwen2) | FP32 | GQA (16:4) | `TransformerKVStateProvider` | **`FULL`** | Architecture Ready |
-| `qwen3.5-9b` | `Qwen/Qwen3.5-9B` | Transformer (Qwen2) | FP16 | GQA (16:4) | `TransformerKVStateProvider` | **`FULL`** | Architecture Ready |
+| `qwen3.5-9b` | `Qwen/Qwen3.5-9B` | Hybrid (Linear SSM + GQA) | FP16 | Hybrid (24 SSM : 8 GQA) | N/A | **`UNSUPPORTED`** | Incompatible (75% SSM) |
 | `tiny-mistral` | `openaccess-ai-collective/tiny-mistral` | Transformer (Mistral) | FP32 / FP16 | GQA (16:4) + Sliding | `SlidingWindowKVStateProvider` | **`FULL`** | Verified (Unit/E2E) |
 | `mistral-7b` | `mistralai/Mistral-7B-v0.1` | Transformer (Mistral) | FP16 | GQA (32:8) + Sliding | `SlidingWindowKVStateProvider` | **`FULL`** | Architecture Ready |
 | `jamba` | `ai21labs/AI21-Jamba-1.5-Mini` | Hybrid (Transformer + SSM) | FP16 | GQA (32:8) + Mamba | `HybridStateProvider` | **`PARTIAL`** | Architecture Ready |

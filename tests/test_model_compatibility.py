@@ -142,7 +142,8 @@ class TestModelRegistry:
         assert models["qwen3-4b"]["compatibility_level"] == CompatibilityLevel.FULL
         assert models["qwen3-8b"]["compatibility_level"] == CompatibilityLevel.FULL
         assert models["qwen3.5-4b"]["compatibility_level"] == CompatibilityLevel.FULL
-        assert models["qwen3.5-9b"]["compatibility_level"] == CompatibilityLevel.FULL
+        assert models["qwen3.5-9b"]["compatibility_level"] == CompatibilityLevel.UNSUPPORTED
+        assert models["qwen3.5-9b"]["has_separable_kv_cache"] is False
 
     def test_tiny_mistral_registered(self):
         models = ModelRegistry.list_models()
