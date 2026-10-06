@@ -106,6 +106,24 @@ KNOWN_MODELS: Dict[str, Dict[str, Any]] = {
         "compatibility_level": CompatibilityLevel.FULL,
         "compatibility_reason": "Qwen 3.5 GQA Transformer architecture supported via QwenAdapter",
     },
+    "qwen3.5-9b": {
+        "model_id": "Qwen/Qwen3.5-9B",
+        "architecture": "qwen2",
+        "model_family": "transformer",
+        "params": "9.0B",
+        "default_precision": "fp16",
+        "supported_precisions": ["fp16", "float16", "fp32", "float32"],
+        "supported_contexts": [512, 1024, 2048, 4096, 8192],
+        "attention_type": "GQA",
+        "num_layers": 32,
+        "num_attention_heads": 16,
+        "num_key_value_heads": 4,
+        "head_dim": 256,
+        "hidden_size": 4096,
+        "vocab_size": 248320,
+        "compatibility_level": CompatibilityLevel.FULL,
+        "compatibility_reason": "Qwen 3.5 9B GQA architecture supported via QwenAdapter",
+    },
     "tiny-mistral": {
         "model_id": "openaccess-ai-collective/tiny-mistral",
         "architecture": "mistral",
@@ -207,6 +225,8 @@ class ModelRegistry:
         # 1. Check known aliases
         if norm_key in ("qwen3.5", "qwen-3.5"):
             norm_key = "qwen3.5-4b"
+        elif norm_key in ("qwen3.5-9b", "qwen-3.5-9b", "qwen3.5_9b", "qwen/qwen3.5-9b"):
+            norm_key = "qwen3.5-9b"
 
         if norm_key in KNOWN_MODELS:
             entry = KNOWN_MODELS[norm_key]
@@ -236,7 +256,23 @@ class ModelRegistry:
         # 2. Try loading AutoConfig from Hugging Face
         try:
             from transformers import AutoConfig
-            hf_cfg = AutoConfig.from_pretrained(model_identifier)
+            try:
+                hf_cfg = AutoConfig.from_pretrained(model_identifier)
+            except Exception:
+                # If identifier lacks vendor namespace (e.g. 'qwen3.5-9b'), try standard org prefixes
+                if "/" not in model_identifier:
+                    alt_id = None
+                    if norm_key.startswith("qwen"):
+                        alt_id = f"Qwen/{model_identifier}"
+                    elif norm_key.startswith("mistral"):
+                        alt_id = f"mistralai/{model_identifier}"
+                    if alt_id:
+                        hf_cfg = AutoConfig.from_pretrained(alt_id)
+                        model_identifier = alt_id
+                    else:
+                        raise
+                else:
+                    raise
         except Exception as e:
             # Cannot inspect
             cfg = ModelArchitectureConfig(
@@ -276,7 +312,7 @@ class ModelRegistry:
             attn_type = "MHA"
 
         # Determine compatibility
-        if model_type in ("qwen2", "qwen", "qwen3", "mistral", "llama"):
+        if model_type in ("qwen2", "qwen", "qwen3", "qwen3_5", "mistral", "llama"):
             comp_level = CompatibilityLevel.FULL
             reason = f"Supported {model_type.upper()} Transformer architecture ({attn_type})"
             family = "transformer"
