@@ -28,16 +28,24 @@ person1_kv_engine/
 ├── workloads/
 │   └── generator.py            # Synthetic & realistic token generation traces
 ├── mock_ssd.py                 # Standalone MockSSD for zero-dependency local testing
-└── tests/
-    └── test_p1_mock.py         # Unit tests proving Person 1 module works independently
+    ├── adapters/               # Architecture-adaptive model adapters and state providers
+    └── tests/
+        └── test_p1_mock.py     # Unit tests proving Person 1 module works independently
 ```
 
 ---
 
-## Independent Parallel Development Guide
+## Testing & Architecture Reference
 
-Person 1 can develop and test the entire KV cache and Top-k algorithm **without waiting for Person 2's SSD**.
-Import and use `MockSSD`:
+- **Subsystem Tests**: `pytest person1_kv_engine/tests/ tests/test_model_adapters.py`
+- **Canonical Architecture**: See [`docs/v2/ARCHITECTURE.md`](../docs/v2/ARCHITECTURE.md)
+- **Model Support & Adapters**: See [`docs/v2/MODEL_SUPPORT.md`](../docs/v2/MODEL_SUPPORT.md)
+
+---
+
+## Independent Development
+
+Person 1 can test the KV cache and Top-k algorithm independently using `MockSSD`:
 
 ```python
 from person1_kv_engine.mock_ssd import MockSSD

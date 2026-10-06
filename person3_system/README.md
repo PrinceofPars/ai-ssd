@@ -32,6 +32,18 @@ person3_system/
 
 ---
 
-## Independent Parallel Development Guide
+## Testing & Architecture Reference
 
-Person 3 can build and verify the entire API gateway, speculative prefetch pipeline, and Streamlit dashboard immediately by connecting `MockKVEngine` and `MockSSD`. When Person 1 and Person 2 finish their implementations, Person 3 swaps the mocks for the real components with zero interface breakage.
+- **Subsystem Tests**: `pytest person3_system/tests/ tests/test_nvme_client.py`
+- **Canonical Architecture**: See [`docs/v2/ARCHITECTURE.md`](../docs/v2/ARCHITECTURE.md)
+- **Benchmarking Protocol**: See [`docs/historical/EXPERIMENT_PROTOCOL.md`](../docs/historical/EXPERIMENT_PROTOCOL.md)
+
+---
+
+## Independent Development
+
+Person 3 can build and verify the API gateway, speculative prefetch pipeline, and Streamlit dashboard independently using `MockKVEngine` and `MockSSD`:
+
+```bash
+streamlit run person3_system/dashboard/dashboard.py
+```

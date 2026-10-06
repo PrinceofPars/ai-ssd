@@ -73,6 +73,7 @@ def parse_arguments() -> Optional[argparse.Namespace]:
     parser.add_argument("--threads", type=int, default=4, help="CPU execution threads (canonical default: 4)")
     parser.add_argument("--seed", type=int, default=42, help="Deterministic random seed (default: 42)")
     parser.add_argument("--list-models", action="store_true", help="List registered models and compatibility classification")
+    parser.add_argument("--inspect-model", type=str, default=None, metavar="MODEL_ID", help="Inspect model architecture, parameters, and AI-SSD compatibility")
 
     # Intercept parsing errors gracefully without raw traceback
     try:
@@ -82,6 +83,30 @@ def parse_arguments() -> Optional[argparse.Namespace]:
 
     if args.list_models:
         list_available_models()
+        sys.exit(0)
+
+    if args.inspect_model:
+        inspect_target = args.inspect_model.strip()
+        cfg, comp_level, comp_reason = ModelRegistry.detect_model_config(inspect_target)
+        print("==================================================")
+        print("         AI-SSD MODEL ARCHITECTURE INSPECTION     ")
+        print("==================================================")
+        print(f"Target Model:          {inspect_target}")
+        print(f"Resolved Model ID:     {cfg.model_id}")
+        print(f"Architecture Family:   {cfg.model_family}")
+        print(f"Architecture Type:     {cfg.architecture}")
+        print(f"Parameters:            {cfg.param_count or 'N/A'}")
+        print(f"Attention Type:        {cfg.attention_type}")
+        print(f"Layers:                {cfg.num_layers}")
+        print(f"Attention Heads:       {cfg.num_attention_heads}")
+        print(f"KV Heads:              {cfg.num_key_value_heads}")
+        print(f"Head Dimension:        {cfg.head_dim}")
+        print(f"Hidden Size:           {cfg.hidden_size}")
+        print(f"Sliding Window:        {cfg.sliding_window or 'None'}")
+        print(f"Default Precision:     {cfg.default_precision.upper()}")
+        print(f"Compatibility Level:   {comp_level.value if hasattr(comp_level, 'value') else comp_level}")
+        print(f"Compatibility Reason:  {comp_reason}")
+        print("==================================================")
         sys.exit(0)
 
     # Validate model through ModelRegistry

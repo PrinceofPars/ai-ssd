@@ -304,7 +304,7 @@ ai-ssd/
 │   └── live_inference/          # Live execution harness and JSON/CSV result traces
 ├── config/                      # Hardware profiles, workload configurations, and model specs
 ├── common/                      # Inter-module schemas (KVBlock, KVRequest, KVResponse), constants
-└── tests/                       # Unit tests, regression suites, and invariant verification (164 tests)
+└── tests/                       # Unit tests, regression suites, and invariant verification (180 tests)
 ```
 
 ---
