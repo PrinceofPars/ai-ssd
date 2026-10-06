@@ -5,6 +5,8 @@
 # - MUST NOT run Python, inference, or benchmarks.
 # - Verifies device availability and outputs standardized status banner.
 
+RUN_DIR="/tmp/ai-ssd-runtime"
+PID_FILE="${RUN_DIR}/qemu.pid"
 RAW_IMG="/opt/ai-ssd-v2/images/v2_nvme.raw"
 INITRD="/opt/ai-ssd-v2/images/initramfs.cpio.gz"
 KERNEL="/opt/ai-ssd-v2/images/vmlinuz"
@@ -14,6 +16,8 @@ TIMEOUT_S=30
 echo "========================================"
 echo "        AI-SSD V2 FIRMWARE"
 echo "========================================"
+
+mkdir -p "$RUN_DIR"
 
 # 1. Prerequisite Checks
 if [ ! -f "$RAW_IMG" ]; then
@@ -71,6 +75,7 @@ nohup qemu-system-x86_64 \
     -device nvme,drive=nvme0,serial=v2-ai-ssd-001,num_queues=8,logical_block_size=4096,physical_block_size=4096 \
     -netdev user,id=net0,hostfwd=tcp:127.0.0.1:${PORT}-:9999 \
     -device virtio-net-pci,netdev=net0 \
+    -pidfile "$PID_FILE" \
     -nographic \
     -append "console=ttyS0 panic=-1 quiet loglevel=3 daemon=1" >/dev/null 2>&1 &
 
@@ -97,6 +102,14 @@ if [ $CONNECTED -eq 1 ]; then
     echo "========================================"
     exit 0
 else
+    # Clean up process if launch failed / timed out
+    if [ -f "$PID_FILE" ]; then
+        Q_PID=$(cat "$PID_FILE" 2>/dev/null)
+        if [ -n "$Q_PID" ] && kill -0 "$Q_PID" 2>/dev/null; then
+            kill -15 "$Q_PID" 2>/dev/null || true
+        fi
+        rm -f "$PID_FILE"
+    fi
     echo "AI-SSD Firmware: DISABLED"
     echo "Reason: Timeout waiting for NVMe guest daemon on port $PORT after ${TIMEOUT_S}s"
     echo "========================================"

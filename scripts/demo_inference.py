@@ -20,45 +20,32 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# Supported models registry with architectural attributes
-SUPPORTED_MODELS = {
-    "qwen3-4b": {
-        "hf_name": "Qwen/Qwen3-4B-Instruct-2507",
-        "default_precision": "fp32",
-        "supported_precisions": ["fp32", "float32"],
-        "supported_contexts": [512, 1024, 2048, 4096, 8192, 16384, 32768],
-        "params": "4.02B",
-        "support_status": "VALIDATED RELEASE (Optimization-1 cc3972e)",
-        "dense_peak_rss_mb": 17028.4,  # Measured baseline reference
-        "expected_tokens_seed42": [
-            11773, 48758, 6529, 19826, 4712, 57203, 12756, 3871,
-            1948, 279, 3239, 4621, 323, 9144, 6894, 13
-        ],
-    },
-    "qwen3-8b": {
-        "hf_name": "Qwen/Qwen3-8B",
-        "default_precision": "fp16",
-        "supported_precisions": ["fp16", "float16"],
-        "supported_contexts": [512, 1024, 2048, 4096, 8192, 16384],
-        "params": "8.19B",
-        "support_status": "VALIDATED RELEASE (Optimization-3 5e1618a)",
-        "dense_peak_rss_mb": 18022.5,  # Measured dense in-DRAM reference
-        "expected_tokens_seed42": [
-            11773, 48758, 6529, 19826, 4712, 57203, 12756, 3871,
-            1948, 279, 3239, 4621, 323, 9144, 6894, 13
-        ],
-    },
-}
+from person1_kv_engine.adapters.registry import ModelRegistry, KNOWN_MODELS
+from person1_kv_engine.adapters.descriptor import CompatibilityLevel
+
+
+def list_available_models() -> None:
+    """Prints all registered models, architectural classification, and compatibility level."""
+    print("==========================================================================================")
+    print("                       AI-SSD V2 ARCHITECTURE-ADAPTIVE MODEL REGISTRY                     ")
+    print("==========================================================================================")
+    print(f"{'Model Key':<14} | {'Architecture':<10} | {'Params':<8} | {'Precision':<9} | {'Compatibility':<12} | {'Attention Type'}")
+    print("-" * 90)
+    for name, info in KNOWN_MODELS.items():
+        comp_str = info["compatibility_level"].value if hasattr(info["compatibility_level"], "value") else str(info["compatibility_level"])
+        attn_type = info.get("attention_type", "GQA")
+        print(f"{name:<14} | {info['architecture']:<10} | {info.get('params', 'N/A'):<8} | {info['default_precision'].upper():<9} | {comp_str:<12} | {attn_type}")
+        print(f"  -> HF ID: {info['model_id']}")
+        print(f"  -> Reason: {info.get('compatibility_reason', 'N/A')}")
+        print(f"  -> Contexts: {info.get('supported_contexts', [])} | Precisions: {info.get('supported_precisions', [])}")
+        print("-" * 90)
+    print("\nRun demo inference: python scripts/demo_inference.py --model <model_key>\n")
 
 
 def print_unknown_model_error(model_name: str) -> None:
-    print(f"\n[ERROR] Unknown model: {model_name}\n")
-    print("Available models in AI-SSD V2:")
-    for name, info in SUPPORTED_MODELS.items():
-        print(f"  • {name:<10} | Params: {info['params']:<6} | Default Precision: {info['default_precision'].upper():<5} | Status: {info['support_status']}")
-        print(f"    Supported Precisions: {', '.join(info['supported_precisions'])}")
-        print(f"    Supported Contexts:   {info['supported_contexts']}")
-    print("")
+    print(f"\n[ERROR] Unknown or uninspected model: {model_name}\n")
+    print("Use --list-models to view registered models, or pass a valid Hugging Face model repository ID.")
+    print("Example: --model qwen3-4b, --model qwen3-8b, --model tiny-mistral\n")
 
 
 def print_invalid_precision_error(model_name: str, precision: str, allowed: List[str]) -> None:
@@ -79,12 +66,14 @@ def parse_arguments() -> Optional[argparse.Namespace]:
         description="AI-SSD V2 Demonstration Inference & Hardware Benchmark CLI",
         add_help=True
     )
-    parser.add_argument("--model", type=str, default="qwen3-4b", help="Model choice: qwen3-4b (default) or qwen3-8b")
-    parser.add_argument("--precision", type=str, default=None, help="Precision: fp32 for qwen3-4b, fp16 for qwen3-8b")
+    parser.add_argument("--model", type=str, default="qwen3-4b", help="Model choice: qwen3-4b (default), qwen3-8b, tiny-mistral, or Hugging Face ID")
+    parser.add_argument("--precision", type=str, default=None, help="Precision: fp32, fp16, etc.")
     parser.add_argument("--context", type=int, default=4096, help="Prompt context token length (default: 4096)")
     parser.add_argument("--decode-tokens", type=int, default=16, dest="decode_tokens", help="Autoregressive decode steps (default: 16)")
     parser.add_argument("--threads", type=int, default=4, help="CPU execution threads (canonical default: 4)")
     parser.add_argument("--seed", type=int, default=42, help="Deterministic random seed (default: 42)")
+    parser.add_argument("--list-models", action="store_true", help="List registered models and compatibility classification")
+    parser.add_argument("--inspect-model", type=str, default=None, metavar="MODEL_ID", help="Inspect model architecture, parameters, and AI-SSD compatibility")
 
     # Intercept parsing errors gracefully without raw traceback
     try:
@@ -92,20 +81,51 @@ def parse_arguments() -> Optional[argparse.Namespace]:
     except SystemExit:
         return None
 
-    # Validate model
-    model_key = args.model.strip().lower()
-    if model_key not in SUPPORTED_MODELS:
-        print_unknown_model_error(args.model)
-        return None
+    if args.list_models:
+        list_available_models()
+        sys.exit(0)
+
+    if args.inspect_model:
+        inspect_target = args.inspect_model.strip()
+        cfg, comp_level, comp_reason = ModelRegistry.detect_model_config(inspect_target)
+        print("==================================================")
+        print("         AI-SSD MODEL ARCHITECTURE INSPECTION     ")
+        print("==================================================")
+        print(f"Target Model:          {inspect_target}")
+        print(f"Resolved Model ID:     {cfg.model_id}")
+        print(f"Architecture Family:   {cfg.model_family}")
+        print(f"Architecture Type:     {cfg.architecture}")
+        print(f"Parameters:            {cfg.param_count or 'N/A'}")
+        print(f"Attention Type:        {cfg.attention_type}")
+        print(f"Layers:                {cfg.num_layers}")
+        print(f"Attention Heads:       {cfg.num_attention_heads}")
+        print(f"KV Heads:              {cfg.num_key_value_heads}")
+        print(f"Head Dimension:        {cfg.head_dim}")
+        print(f"Hidden Size:           {cfg.hidden_size}")
+        print(f"Sliding Window:        {cfg.sliding_window or 'None'}")
+        print(f"Default Precision:     {cfg.default_precision.upper()}")
+        print(f"Compatibility Level:   {comp_level.value if hasattr(comp_level, 'value') else comp_level}")
+        print(f"Compatibility Reason:  {comp_reason}")
+        print("==================================================")
+        sys.exit(0)
+
+    # Validate model through ModelRegistry
+    model_key = args.model.strip()
+    cfg, comp_level, comp_reason = ModelRegistry.detect_model_config(model_key)
+
+    if comp_level == CompatibilityLevel.UNSUPPORTED:
+        print(f"\n[UNSUPPORTED ARCHITECTURE] Model '{model_key}' cannot be executed through AI-SSD.")
+        print(f"Reason: {comp_reason}")
+        print("AI-SSD requires architectures with separable Attention Key-Value caches for Top-K offload.\n")
+        sys.exit(1)
 
     # Resolve and validate precision
-    model_info = SUPPORTED_MODELS[model_key]
     if args.precision is None:
-        args.precision = model_info["default_precision"]
+        args.precision = cfg.default_precision
     else:
         prec_clean = args.precision.strip().lower()
-        if prec_clean not in model_info["supported_precisions"]:
-            print_invalid_precision_error(model_key, args.precision, model_info["supported_precisions"])
+        if cfg.supported_precisions and prec_clean not in cfg.supported_precisions:
+            print_invalid_precision_error(model_key, args.precision, cfg.supported_precisions)
             return None
         args.precision = prec_clean
 
@@ -119,6 +139,7 @@ def parse_arguments() -> Optional[argparse.Namespace]:
         print_invalid_threads_error(args.threads)
         return None
 
+    args.model_cfg = cfg
     return args
 
 
@@ -127,14 +148,15 @@ def main():
     if args is None:
         sys.exit(1)
 
+    cfg = args.model_cfg
     model_key = args.model.strip().lower()
-    model_info = SUPPORTED_MODELS[model_key]
-    hf_model_name = model_info["hf_name"]
+    hf_model_name = cfg.model_id
 
     print("==================================================")
     print("      AI-SSD V2 LIVE DEMO & BENCHMARK")
     print("==================================================")
     print(f"Model:                 {model_key} ({hf_model_name})")
+    print(f"Architecture:          {cfg.architecture.upper()} ({cfg.attention_type})")
     print(f"Precision:             {args.precision.upper()}")
     print(f"Context Length:        {args.context} tokens")
     print(f"Decode Tokens:         {args.decode_tokens} tokens")
@@ -216,7 +238,7 @@ def main():
     generated_text = data.get("generated_text", "")
 
     # Token correctness check
-    expected_tokens = model_info.get("expected_tokens_seed42")
+    expected_tokens = cfg.expected_tokens_seed42
     if expected_tokens is not None and args.seed == 42 and args.decode_tokens == 16:
         match_count = sum(1 for a, b in zip(token_ids, expected_tokens) if a == b)
         is_exact = (match_count == 16 and len(token_ids) == 16)
@@ -225,7 +247,7 @@ def main():
         correctness_str = f"PASS ({len(token_ids)} tokens generated, non-canonical seed/len)"
 
     # Memory reduction calculation against measured dense baseline
-    dense_ref_mb = model_info.get("dense_peak_rss_mb")
+    dense_ref_mb = cfg.dense_peak_rss_mb
     if dense_ref_mb is not None:
         mem_red_mb = dense_ref_mb - aissd_rss_mb
         mem_red_pct = (mem_red_mb / dense_ref_mb) * 100.0

@@ -35,10 +35,17 @@ person2_ssd/
 
 ---
 
-## Independent Parallel Development Guide
+## Testing & Architecture Reference
 
-Person 2 can develop and benchmark both Conventional and Tensor-Aware FTL **without waiting for Person 1's real LLM code**.
-Import and use `MockKVEngine`:
+- **Subsystem Tests**: `pytest person2_ssd/tests/ tests/test_v2_storage.py`
+- **Canonical Architecture**: See [`docs/v2/ARCHITECTURE.md`](../docs/v2/ARCHITECTURE.md)
+- **Vendor Integration**: See [`docs/v2/STORAGE_COMPANY_GUIDE.md`](../docs/v2/STORAGE_COMPANY_GUIDE.md)
+
+---
+
+## Independent Development
+
+Person 2 can develop and benchmark both Conventional and Tensor-Aware FTL independently:
 
 ```python
 from person2_ssd.mock_kv_engine import MockKVEngine
