@@ -357,7 +357,7 @@ tmux attach -t p1
 
 # 2. Activate virtual environment and navigate to worktree
 cd /home/ubuntu/ai-ssd
-source /home/ubuntu/ai-ssd-p1/.venv/bin/activate
+source .venv/bin/activate
 
 # 3. Verify clean git state
 git status
