@@ -420,6 +420,6 @@ class ModelRegistry:
     @classmethod
     def list_models(cls) -> Dict[str, Dict[str, Any]]:
         """Returns all registered models with their metadata and compatibility status."""
-        models = dict(KNOWN_MODELS)
-        models.update(load_custom_models())
+        models = dict(load_custom_models())
+        models.update(KNOWN_MODELS)
         return models
