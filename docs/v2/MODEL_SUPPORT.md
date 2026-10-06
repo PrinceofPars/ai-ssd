@@ -120,7 +120,54 @@ The AI-SSD execution pipeline loads models using Hugging Face's `transformers` l
 
 ## 4. How to Add a New Model
 
-To integrate an arbitrary model family into the AI-SSD architecture-adaptive pipeline, follow these 12 steps:
+### 4.1 Automated One-Command Model Onboarding (`scripts/add_model.py`)
+
+AI-SSD V2 provides an automated CLI to onboard any Hugging Face model or local weights directory with zero manual code editing:
+
+```bash
+# Automated onboarding (checks validity, checks cache, downloads if needed, registers)
+python scripts/add_model.py <model_name_or_hf_id>
+
+# Or via demo_inference:
+python scripts/demo_inference.py --add-model <model_name_or_hf_id>
+```
+
+#### What `scripts/add_model.py` Does Automatically:
+1. **Validates Model Identifier**: Checks the repository on Hugging Face Hub (or verifies local folder).
+2. **Local Cache Check (Zero Redundant Downloads)**:
+   - If the model is already downloaded in `~/.cache/huggingface/hub/` or a local path, it **skips downloading**.
+   - If weights are missing, it downloads safetensors and tokenizer weights automatically.
+3. **Architecture & Geometry Extraction**:
+   - Inspects number of layers, query heads, KV heads, head dimension, hidden size, and sliding window.
+   - Calculates attention type (MHA, GQA with ratio, MQA).
+   - Estimates model parameter count (e.g., `1.5B`, `9.0B`).
+   - Determines AI-SSD compatibility tier (`FULL`, `PARTIAL`, `UNSUPPORTED`).
+4. **Persistent Registration**:
+   - Assigns a clean, exact `model-key` (e.g., `qwen2.5-1.5b`) and saves it persistently to `person1_kv_engine/adapters/custom_models.json`.
+5. **Ready for Immediate Demo Inference**:
+   - The registered model appears directly in `python scripts/demo_inference.py --list-models`.
+   - Run inference using the exact key: `python scripts/demo_inference.py --model <model-key>`.
+
+#### Examples:
+```bash
+# Onboard a model from Hugging Face
+python scripts/add_model.py Qwen/Qwen2.5-0.5B
+
+# Onboard with custom model key
+python scripts/add_model.py mistralai/Mistral-7B-v0.1 --model-key my-mistral-7b
+
+# View all registered models (built-in + user added)
+python scripts/demo_inference.py --list-models
+
+# Run live inference with the exact registered key
+python scripts/demo_inference.py --model qwen2.5-0.5b --context 4096
+```
+
+---
+
+### 4.2 Manual / Deep Architecture Adaptation (12 Steps)
+
+To integrate fundamentally novel non-Transformer architectures into the AI-SSD architecture-adaptive pipeline, follow these 12 steps:
 
 ```text
 Step 1: Identify architecture family (Transformer, Sliding-Window, Hybrid, SSM)
@@ -137,7 +184,7 @@ Step 11: Run numerical correctness validation against dense baseline
 Step 12: Run end-to-end performance benchmarks
 ```
 
-### Files to Modify:
+#### Files to Modify for Custom Adapters:
 1. **`person1_kv_engine/adapters/model_adapter.py`**: Add layer hooks if the model does not inherit standard Hugging Face attention patterns (`self_attn.forward`).
 2. **`person1_kv_engine/adapters/registry.py`**: Add entry to `KNOWN_MODELS` with layer count, head count, head dimension, and compatibility classification.
 3. **`tests/test_model_compatibility.py`**: Add unit tests validating config detection and adapter creation.

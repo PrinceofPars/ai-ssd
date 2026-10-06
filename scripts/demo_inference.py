@@ -31,7 +31,7 @@ def list_available_models() -> None:
     print("==========================================================================================")
     print(f"{'Model Key':<14} | {'Architecture':<10} | {'Params':<8} | {'Precision':<9} | {'Compatibility':<12} | {'Attention Type'}")
     print("-" * 90)
-    for name, info in KNOWN_MODELS.items():
+    for name, info in ModelRegistry.list_models().items():
         comp_str = info["compatibility_level"].value if hasattr(info["compatibility_level"], "value") else str(info["compatibility_level"])
         attn_type = info.get("attention_type", "GQA")
         print(f"{name:<14} | {info['architecture']:<10} | {info.get('params', 'N/A'):<8} | {info['default_precision'].upper():<9} | {comp_str:<12} | {attn_type}")
@@ -74,12 +74,18 @@ def parse_arguments() -> Optional[argparse.Namespace]:
     parser.add_argument("--seed", type=int, default=42, help="Deterministic random seed (default: 42)")
     parser.add_argument("--list-models", action="store_true", help="List registered models and compatibility classification")
     parser.add_argument("--inspect-model", type=str, default=None, metavar="MODEL_ID", help="Inspect model architecture, parameters, and AI-SSD compatibility")
+    parser.add_argument("--add-model", type=str, default=None, metavar="MODEL_ID", help="Validate, download (if not cached), inspect, and register a new model")
 
     # Intercept parsing errors gracefully without raw traceback
     try:
         args = parser.parse_args()
     except SystemExit:
         return None
+
+    if args.add_model:
+        from scripts.add_model import inspect_and_register_model
+        res = inspect_and_register_model(args.add_model)
+        sys.exit(0 if res else 1)
 
     if args.list_models:
         list_available_models()

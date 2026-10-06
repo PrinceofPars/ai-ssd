@@ -186,6 +186,50 @@ class TestModelRegistry:
         adapter_jam = ModelRegistry.get_adapter(cfg_jam)
         assert isinstance(adapter_jam, HybridJambaAdapter)
 
+    def test_custom_model_registration_and_persistence(self, tmp_path):
+        from person1_kv_engine.adapters.registry import CUSTOM_MODELS_FILE, save_custom_model, KNOWN_MODELS
+        test_key = "test-auto-registered-model"
+        entry = {
+            "model_id": "test-org/test-model-1b",
+            "architecture": "qwen2",
+            "model_family": "transformer",
+            "params": "1.0B",
+            "default_precision": "fp16",
+            "supported_precisions": ["fp16", "float16"],
+            "supported_contexts": [512, 1024, 2048],
+            "attention_type": "GQA",
+            "num_layers": 16,
+            "num_attention_heads": 8,
+            "num_key_value_heads": 2,
+            "head_dim": 64,
+            "hidden_size": 1024,
+            "vocab_size": 32000,
+            "compatibility_level": CompatibilityLevel.FULL,
+            "compatibility_reason": "Custom test model registered",
+        }
+        ModelRegistry.register_model_entry(test_key, entry)
+
+        # Verify it appears in list_models
+        models = ModelRegistry.list_models()
+        assert test_key in models
+        assert models[test_key]["model_id"] == "test-org/test-model-1b"
+
+        # Verify detect_model_config resolves it
+        cfg, comp, reason = ModelRegistry.detect_model_config(test_key)
+        assert comp == CompatibilityLevel.FULL
+        assert cfg.num_layers == 16
+        assert cfg.num_attention_heads == 8
+
+        # Clean up test entry
+        KNOWN_MODELS.pop(test_key, None)
+        if CUSTOM_MODELS_FILE.exists():
+            import json
+            with open(CUSTOM_MODELS_FILE, "r") as f:
+                d = json.load(f)
+            d.pop(test_key, None)
+            with open(CUSTOM_MODELS_FILE, "w") as f:
+                json.dump(d, f)
+
 
 class TestStateProviders:
     """Test concrete StateProvider implementations without full model weights."""

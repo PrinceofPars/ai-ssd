@@ -7,6 +7,8 @@ hybrid (Jamba), and unsupported architectures.
 from __future__ import annotations
 from typing import Dict, Any, List, Optional, Type, Tuple
 import logging
+import json
+from pathlib import Path
 
 from person1_kv_engine.adapters.descriptor import (
     ModelArchitectureConfig,
@@ -20,6 +22,45 @@ from person1_kv_engine.adapters.model_adapter import (
 )
 
 logger = logging.getLogger(__name__)
+
+CUSTOM_MODELS_FILE = Path(__file__).resolve().parent / "custom_models.json"
+
+
+def load_custom_models() -> Dict[str, Dict[str, Any]]:
+    """Loads user-registered models from custom_models.json."""
+    if not CUSTOM_MODELS_FILE.exists():
+        return {}
+    try:
+        with open(CUSTOM_MODELS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for k, v in data.items():
+            if "compatibility_level" in v and isinstance(v["compatibility_level"], str):
+                try:
+                    v["compatibility_level"] = CompatibilityLevel(v["compatibility_level"])
+                except Exception:
+                    pass
+        return data
+    except Exception as e:
+        logger.warning(f"Failed to load custom models: {e}")
+        return {}
+
+
+def save_custom_model(model_key: str, entry: Dict[str, Any]) -> None:
+    """Saves a user-registered model to custom_models.json and updates in-memory registry."""
+    current = {}
+    if CUSTOM_MODELS_FILE.exists():
+        try:
+            with open(CUSTOM_MODELS_FILE, "r", encoding="utf-8") as f:
+                current = json.load(f)
+        except Exception:
+            current = {}
+    entry_copy = dict(entry)
+    if "compatibility_level" in entry_copy and hasattr(entry_copy["compatibility_level"], "value"):
+        entry_copy["compatibility_level"] = entry_copy["compatibility_level"].value
+    current[model_key] = entry_copy
+    with open(CUSTOM_MODELS_FILE, "w", encoding="utf-8") as f:
+        json.dump(current, f, indent=2)
+    KNOWN_MODELS[model_key] = entry
 
 
 # Built-in canonical validated models registry
@@ -228,8 +269,9 @@ class ModelRegistry:
         elif norm_key in ("qwen3.5-9b", "qwen-3.5-9b", "qwen3.5_9b", "qwen/qwen3.5-9b"):
             norm_key = "qwen3.5-9b"
 
-        if norm_key in KNOWN_MODELS:
-            entry = KNOWN_MODELS[norm_key]
+        all_models = cls.list_models()
+        if norm_key in all_models:
+            entry = all_models[norm_key]
             cfg = ModelArchitectureConfig(
                 model_id=entry["model_id"],
                 architecture=entry["architecture"],
@@ -365,6 +407,13 @@ class ModelRegistry:
         return adapter_cls(config)
 
     @classmethod
+    def register_model_entry(cls, model_key: str, entry: Dict[str, Any]) -> None:
+        """Persists and registers a new model entry into the registry."""
+        save_custom_model(model_key, entry)
+
+    @classmethod
     def list_models(cls) -> Dict[str, Dict[str, Any]]:
         """Returns all registered models with their metadata and compatibility status."""
-        return KNOWN_MODELS
+        models = dict(KNOWN_MODELS)
+        models.update(load_custom_models())
+        return models
