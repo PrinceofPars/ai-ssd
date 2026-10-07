@@ -1,0 +1,68 @@
+{
+  "schema_version": "2.0",
+  "timestamp_utc": "2026-10-07T18:43:04Z",
+  "source": "scripts/run_quick_comparison.py",
+  "model": {
+    "name": "Qwen2.5",
+    "full_name": "Qwen2.5-0.5B",
+    "model_id": "Qwen/Qwen2.5-0.5B",
+    "weight": "0.5B",
+    "precision": "fp32",
+    "precision_display": "FP32"
+  },
+  "benchmark": {
+    "mode": "AISSD",
+    "context_length": 4096,
+    "decode_tokens": 16,
+    "threads": 4,
+    "storage_mode": "file",
+    "computational_storage": true
+  },
+  "metrics": {
+    "ram_consumption": {
+      "peak_rss_mb": 5328.69,
+      "avg_rss_mb": 5309.74,
+      "min_rss_mb": 5290.69,
+      "vm_peak_mb": 9228.39,
+      "final_rss_mb": 2951.44
+    },
+    "kv_cache": {
+      "active_kv_mb": 10.22,
+      "cold_kv_mb": 95.62,
+      "total_kv_mb": 105.84
+    },
+    "performance": {
+      "wall_time_s": 3.154,
+      "tokens_per_second": 5.073,
+      "latency_ms_per_token": 197.1
+    },
+    "storage_bus": {
+      "candidate_k_bytes_to_host": 0,
+      "winning_kv_bytes_to_host": 153354240,
+      "storage_read_bytes": 76677120,
+      "visible_storage_s": 0.078
+    },
+    "verification": {
+      "exact_token_match": true,
+      "token_ids": [
+        11773,
+        48758,
+        6529,
+        19826,
+        4712,
+        57203,
+        12756,
+        3871,
+        1948,
+        279,
+        3239,
+        4621,
+        323,
+        9144,
+        6894,
+        13
+      ],
+      "generated_text": " hardware accelerated attention scoring engine computes dot products between the query vector and candidate keys."
+    }
+  }
+}

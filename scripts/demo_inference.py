@@ -22,6 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from person1_kv_engine.adapters.registry import ModelRegistry, KNOWN_MODELS
 from person1_kv_engine.adapters.descriptor import CompatibilityLevel
+from benchmarks.live_inference.result_schema import build_benchmark_record, save_benchmark_result
 
 
 def list_available_models() -> None:
@@ -78,11 +79,10 @@ def parse_arguments() -> Optional[argparse.Namespace]:
     parser.add_argument("--inspect-model", type=str, default=None, metavar="MODEL_ID", help="Inspect model architecture, parameters, and AI-SSD compatibility")
     parser.add_argument("--add-model", type=str, default=None, metavar="MODEL_ID", help="Validate, download (if not cached), inspect, and register a new model")
 
-    # Intercept parsing errors gracefully without raw traceback
     try:
         args = parser.parse_args()
-    except SystemExit:
-        return None
+    except SystemExit as e:
+        sys.exit(e.code)
 
     if args.prompt:
         from person1_kv_engine.real_llm.aissd_inference import is_english_text
@@ -280,6 +280,27 @@ def main():
         print("==================================================")
         print("Notice: To enable AI-SSD NVMe acceleration, FTL offloading, and in-storage Top-K, run: ./enable_ai_ssd.sh")
         print("==================================================")
+
+        # Save standardized benchmark result
+        try:
+            rec = build_benchmark_record(
+                source="scripts/demo_inference.py",
+                mode="baseline",
+                model_name=model_key,
+                precision=args.precision,
+                context_length=args.context,
+                decode_tokens=args.decode_tokens,
+                threads=args.threads,
+                raw_metrics=data,
+                model_id=hf_model_name,
+                storage_mode="none",
+                computational_storage=False,
+            )
+            saved_p = save_benchmark_result(rec, prefix="demo_inference")
+            print(f"[AI-SSD Telemetry] Result stored to: {saved_p}")
+        except Exception as e:
+            print(f"[WARNING] Failed to store benchmark result: {e}")
+
         return
 
     # AI-SSD ACCELERATED INFERENCE (FIRMWARE ENABLED)
@@ -417,8 +438,27 @@ def main():
     print("--------------------------------------------------")
     print(f"Token Correctness:      {correctness_str} [REAL]")
     print(f"Generated Token IDs:    {token_ids}")
-    print(f"Generated Text:         {generated_text.strip()!r}")
     print("==================================================")
+
+    # Save standardized benchmark result
+    try:
+        rec = build_benchmark_record(
+            source="scripts/demo_inference.py",
+            mode="aissd",
+            model_name=model_key,
+            precision=args.precision,
+            context_length=args.context,
+            decode_tokens=args.decode_tokens,
+            threads=args.threads,
+            raw_metrics=data,
+            model_id=hf_model_name,
+            storage_mode="nvme_qemu",
+            computational_storage=True,
+        )
+        saved_p = save_benchmark_result(rec, prefix="demo_inference")
+        print(f"[AI-SSD Telemetry] Result stored to: {saved_p}")
+    except Exception as e:
+        print(f"[WARNING] Failed to store benchmark result: {e}")
 
 
 if __name__ == "__main__":

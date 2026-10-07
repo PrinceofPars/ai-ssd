@@ -1,0 +1,32 @@
+{
+  "qwen3-2b": {
+    "model_id": "Qwen/Qwen3-2B",
+    "architecture": "qwen3_5",
+    "model_family": "hybrid_recurrent",
+    "params": "2.3B",
+    "default_precision": "fp16",
+    "supported_precisions": [
+      "fp16",
+      "float16",
+      "fp32",
+      "float32"
+    ],
+    "supported_contexts": [
+      512,
+      1024,
+      2048,
+      4096,
+      8192
+    ],
+    "attention_type": "GQA (8:2)",
+    "sliding_window": null,
+    "num_layers": 24,
+    "num_attention_heads": 8,
+    "num_key_value_heads": 2,
+    "head_dim": 256,
+    "hidden_size": 2048,
+    "vocab_size": 248320,
+    "compatibility_level": "PARTIAL",
+    "compatibility_reason": "Hybrid Attention + Linear SSM: 8 Full GQA Attention layers offloaded to AI-SSD, 24 Linear Attention SSM layers resident in DRAM via HybridQwen35Adapter"
+  }
+}

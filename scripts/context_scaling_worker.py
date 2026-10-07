@@ -164,9 +164,9 @@ def run_worker():
 
     else:
         # AI-SSD mode
-        num_layers = getattr(engine.model.config, "num_hidden_layers", 36)
-        num_kv_heads = getattr(engine.model.config, "num_key_value_heads", 8)
-        head_dim = getattr(engine.model.config, "head_dim", 128)
+        num_layers = getattr(engine, "num_layers", getattr(engine.model.config, "num_hidden_layers", 36))
+        num_kv_heads = getattr(engine, "num_kv_heads", getattr(engine.model.config, "num_key_value_heads", 8))
+        head_dim = getattr(engine, "head_dim", getattr(engine.model.config, "head_dim", 128))
 
         backend = create_default_storage_backend(
             channels=8,

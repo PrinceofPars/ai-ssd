@@ -555,8 +555,16 @@ def run_aissd_decode(
 
     # If no model_adapter is passed, resolve or build a default config
     if model_adapter is None:
-        m_cfg, _, _ = ModelRegistry.detect_model_config(getattr(model.config, "_name_or_path", "qwen"))
+        m_cfg, comp_level, comp_reason = ModelRegistry.detect_model_config(getattr(model.config, "_name_or_path", "qwen"))
         model_adapter = ModelRegistry.get_adapter(m_cfg)
+        if model_adapter is None and hasattr(model, "model") and hasattr(model.model, "layers") and len(model.model.layers) > 0:
+            first_layer = model.model.layers[0]
+            if not hasattr(first_layer, "self_attn"):
+                raise ValueError(
+                    f"Architecture '{getattr(model.config, 'model_type', 'unknown')}' does not have standard 'self_attn' layers. "
+                    f"AI-SSD requires models with standard separable KV attention caches (e.g. Qwen2, Qwen2.5, Mistral, LLaMA). "
+                    f"For Qwen, please use Qwen2.5 (e.g. 'Qwen/Qwen2.5-0.5B', 'Qwen/Qwen2.5-1.5B', 'Qwen/Qwen2.5-3B') or 'Qwen/Qwen3-4B-Instruct-2507'."
+                )
     else:
         m_cfg = model_adapter.config
 
