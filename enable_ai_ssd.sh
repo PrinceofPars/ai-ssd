@@ -63,19 +63,21 @@ fi
 
 LOG_FILE="${RUN_DIR}/qemu.log"
 
-# Detect KVM availability
-KVM_OPTS=()
+# Detect KVM availability (POSIX sh compatible)
 if [ -e /dev/kvm ] && [ -w /dev/kvm ]; then
-    KVM_OPTS=(-enable-kvm -cpu host)
+    KVM_FLAG="-enable-kvm"
+    CPU_FLAG="host"
 else
     # Fallback to software emulation if hardware KVM is not available (common on cloud VMs)
-    KVM_OPTS=(-cpu max)
+    KVM_FLAG=""
+    CPU_FLAG="max"
     TIMEOUT_S=60
 fi
 
 # 3. Launch QEMU with NVMe Controller and Guest Daemon
 nohup qemu-system-x86_64 \
-    "${KVM_OPTS[@]}" \
+    $KVM_FLAG \
+    -cpu "$CPU_FLAG" \
     -m 2048 \
     -smp 2 \
     -no-reboot \
