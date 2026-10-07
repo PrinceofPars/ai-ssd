@@ -105,9 +105,9 @@ def print_comparison(baseline_json: str, aissd_json: str, model_name: str):
         matches = sum(1 for x, y in zip(b_tokens, a_tokens) if x == y)
         total = min(len(b_tokens), len(a_tokens))
         pct = (matches / total) * 100.0 if total > 0 else 0.0
-        print(f"Token Parity       : {matches}/{total} tokens identical ({pct:.1f}% match)")
-    print(f"Baseline Generated : {repr(b.get('generated_text', ''))[:60]}...")
-    print(f"AI-SSD Generated   : {repr(a.get('generated_text', ''))[:60]}...")
+        # print(f"Token Parity       : {matches}/{total} tokens identical ({pct:.1f}% match)")
+    # print(f"Baseline Generated : {repr(b.get('generated_text', ''))[:60]}...")
+    # print(f"AI-SSD Generated   : {repr(a.get('generated_text', ''))[:60]}...")
     print("=" * 80 + "\n")
 
 

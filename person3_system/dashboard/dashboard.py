@@ -31,7 +31,6 @@ from benchmarks.live_inference.result_schema import (
 # Page configuration
 st.set_page_config(
     page_title="AI-SSD V2 — Telemetry & Evaluation Dashboard",
-    page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -229,23 +228,18 @@ def fmt_val(val: Any, unit: str = "", fmt: str = ".2f") -> str:
 
 def get_beige_plotly_layout(title: str, x_title: str, y_title: str, height: int = 420) -> Dict[str, Any]:
     """Generates standard layout matching the warm beige & terracotta theme."""
-    return {
-        "title": {
-            "text": f"<b>{title}</b>",
-            "font": {"size": 15, "color": "#2C2621", "family": "-apple-system, sans-serif"},
-            "x": 0.02,
-        },
+    layout = {
         "paper_bgcolor": "#FFFDF9",
         "plot_bgcolor": "#F9F6F0",
         "font": {"color": "#3D3630", "family": "-apple-system, sans-serif"},
-        "margin": {"l": 60, "r": 30, "t": 60, "b": 50},
+        "margin": {"l": 60, "r": 30, "t": 60 if title else 35, "b": 50},
         "height": height,
         "legend": {
             "orientation": "h",
             "yanchor": "bottom",
             "y": 1.02,
-            "xanchor": "right",
-            "x": 1,
+            "xanchor": "left" if not title else "right",
+            "x": 0.0 if not title else 1.0,
             "font": {"size": 11, "color": "#2C2621"},
             "bgcolor": "rgba(255, 253, 249, 0.85)",
             "bordercolor": "#E6DFD5",
@@ -271,6 +265,13 @@ def get_beige_plotly_layout(title: str, x_title: str, y_title: str, height: int 
             "bordercolor": "#C25E34",
         },
     }
+    if title:
+        layout["title"] = {
+            "text": f"<b>{title}</b>",
+            "font": {"size": 15, "color": "#2C2621", "family": "-apple-system, sans-serif"},
+            "x": 0.02,
+        }
+    return layout
 
 
 # Load existing legacy benchmark artifacts
@@ -288,24 +289,24 @@ data_phase7 = load_json_file("benchmarks/live_inference/results/phase7_computati
 # =====================================================================
 st.sidebar.markdown("""
 <div style="padding-bottom: 8px;">
-    <h3 style="margin-bottom: 2px; color: #C25E34;">⚡ AI-SSD V2</h3>
+    <h3 style="margin-bottom: 2px; color: #C25E34;">AI-SSD V2</h3>
     <span style="font-size: 0.85rem; color: #6C635B;">Computational Storage Telemetry</span>
 </div>
 """, unsafe_allow_html=True)
 
 sections = [
-    "1. 📊 Scaling & RAM Charts",
-    "2. ⚡ Executive Summary",
-    "3. 🔬 Canonical Model Benchmarks",
-    "4. 🏛️ Architecture & Storage Offload",
-    "5. ✅ Verification & Correctness",
+    "1. Scaling & RAM Charts",
+    "2. Executive Summary",
+    "3. Canonical Model Benchmarks",
+    "4. Architecture & Storage Offload",
+    # "5. Verification & Correctness",
 ]
 selected_section = st.sidebar.radio("Navigate Sections:", sections, index=0)
 
 st.sidebar.markdown("---")
 
 # Quick benchmark reload button
-if st.sidebar.button("🔄 Refresh Benchmark Data"):
+if st.sidebar.button("Refresh Benchmark Data"):
     st.cache_data.clear()
     st.rerun()
 
@@ -318,10 +319,10 @@ st.sidebar.markdown("""
 
 
 # =====================================================================
-# SECTION 1: 📊 SCALING & RAM CHARTS (CORE USER REQUIREMENT)
+# SECTION 1: SCALING & RAM CHARTS (CORE USER REQUIREMENT)
 # =====================================================================
-if selected_section == "1. 📊 Scaling & RAM Charts":
-    st.markdown('<div class="main-title">📊 Context Scaling: RAM Consumption vs Context Length</div>', unsafe_allow_html=True)
+if selected_section == "1. Scaling & RAM Charts":
+    st.markdown('<div class="main-title">Context Scaling: RAM Consumption vs Context Length</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-title">Empirical memory telemetry extracted directly from the <code>benchmarks/</code> directory</div>', unsafe_allow_html=True)
 
     # 1. Fetch benchmark records & model catalog
@@ -419,7 +420,7 @@ if selected_section == "1. 📊 Scaling & RAM Charts":
             x=sorted_base_x,
             y=sorted_base_y,
             mode="lines+markers",
-            name="Dense Baseline (100% Host DRAM)",
+            name="Dense Baseline (Host DRAM)",
             line=dict(color="#5A6578", width=2.8, dash="solid"),
             marker=dict(size=8, symbol="circle", color="#5A6578"),
             hovertemplate="<b>Dense Baseline</b><br>Context: %{x:,} tokens<br>RAM: %{y:,.1f} MB<extra></extra>",
@@ -431,7 +432,7 @@ if selected_section == "1. 📊 Scaling & RAM Charts":
             x=sorted_aissd_x,
             y=sorted_aissd_y,
             mode="lines+markers",
-            name="AI-SSD V2 (In-Storage Top-K Offload)",
+            name="AI-SSD V2 (Top-K Offload)",
             line=dict(color="#C25E34", width=3.2),
             marker=dict(size=9, symbol="diamond", color="#C25E34"),
             hovertemplate="<b>AI-SSD V2</b><br>Context: %{x:,} tokens<br>RAM: %{y:,.1f} MB<extra></extra>",
@@ -471,7 +472,7 @@ if selected_section == "1. 📊 Scaling & RAM Charts":
             x=curve_data["contexts"],
             y=y_dense_proj,
             mode="lines",
-            name="Theoretical Dense Upper Bound",
+            name="Theoretical Dense Bound",
             line=dict(color="#8C9BAE", width=1.5, dash="dot"),
             hovertemplate="<b>Dense Projection</b><br>Context: %{x:,}<br>Est RAM: %{y:,.1f} MB<extra></extra>",
         ))
@@ -479,7 +480,7 @@ if selected_section == "1. 📊 Scaling & RAM Charts":
             x=curve_data["contexts"],
             y=y_aissd_proj,
             mode="lines",
-            name="Theoretical AI-SSD Target (10% Sparse)",
+            name="Theoretical AI-SSD (10% Sparse)",
             line=dict(color="#D97746", width=1.5, dash="dot"),
             hovertemplate="<b>AI-SSD Projection</b><br>Context: %{x:,}<br>Est RAM: %{y:,.1f} MB<extra></extra>",
         ))
@@ -492,15 +493,28 @@ if selected_section == "1. 📊 Scaling & RAM Charts":
     y_axis_label = "Host Process RAM Peak RSS (MB)" if "RSS" in metric_choice else "Active KV Cache Footprint (MB)"
     
     chart_layout = get_beige_plotly_layout(
-        title=f"RAM Consumption vs Context Length — {model_label}",
+        title="",  # Rendered cleanly in Streamlit above canvas to prevent any collision
         x_title="Context Length (Tokens)",
         y_title=y_axis_label,
         height=450
     )
     chart_layout["xaxis"]["type"] = "linear"
+    chart_layout["margin"]["t"] = 35
+    chart_layout["legend"] = {
+        "orientation": "h",
+        "yanchor": "bottom",
+        "y": 1.02,
+        "xanchor": "left",
+        "x": 0.0,
+        "font": {"size": 11, "color": "#2C2621"},
+        "bgcolor": "rgba(255, 253, 249, 0.85)",
+        "bordercolor": "#E6DFD5",
+        "borderwidth": 1
+    }
     fig.update_layout(chart_layout)
 
-    # Render Chart
+    # Render Chart Title in Streamlit above canvas, followed by Chart
+    st.markdown(f'<div style="font-weight: 700; font-size: 1.15rem; color: #2C2621; margin: 12px 0 6px 0;">RAM Consumption vs Context Length — {model_label}</div>', unsafe_allow_html=True)
     st.plotly_chart(fig, width="stretch")
 
     # 4. Summary Metrics
@@ -536,7 +550,7 @@ if selected_section == "1. 📊 Scaling & RAM Charts":
     st.markdown("---")
 
     # 5. Data Table Section
-    st.markdown("#### 📋 Empirical Benchmark Data Points")
+    st.markdown("#### Empirical Benchmark Data Points")
     st.caption("Raw machine-readable records pulled from `benchmarks/live_inference/results/` matching current filter criteria")
 
     if filtered_records:
@@ -561,7 +575,7 @@ if selected_section == "1. 📊 Scaling & RAM Charts":
     # 6. Guidance Box
     st.markdown("""
     <div class="beige-card" style="margin-top: 15px;">
-        <h4 style="margin-top: 0; color: #C25E34;">⚡ Generating Live Telemetry Data</h4>
+        <h4 style="margin-top: 0; color: #C25E34;">Generating Live Telemetry Data</h4>
         <p style="font-size: 0.9rem; color: #5C554E; margin-bottom: 8px;">
             All live tests execute through standard scripts and automatically save their telemetry in the standardized <code>benchmarks/live_inference/results/</code> schema:
         </p>
@@ -576,10 +590,10 @@ if selected_section == "1. 📊 Scaling & RAM Charts":
 
 
 # =====================================================================
-# SECTION 2: ⚡ EXECUTIVE SUMMARY
+# SECTION 2: EXECUTIVE SUMMARY
 # =====================================================================
-elif selected_section == "2. ⚡ Executive Summary":
-    st.markdown('<div class="main-title">⚡ AI-SSD V2 — Executive System Summary</div>', unsafe_allow_html=True)
+elif selected_section == "2. Executive Summary":
+    st.markdown('<div class="main-title">AI-SSD V2 — Executive System Summary</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-title">Computational Storage, NVMe Multi-Channel Parallelism & KV Cache Memory Wall Elimination</div>', unsafe_allow_html=True)
 
     col_s1, col_s2, col_s3, col_s4 = st.columns(4)
@@ -596,7 +610,7 @@ elif selected_section == "2. ⚡ Executive Summary":
 
     st.markdown("""
     <div class="beige-card">
-        <h3 style="margin-top: 0; color: #C25E34;">🎯 The LLM KV Cache Memory Wall & Solution</h3>
+        <h3 style="margin-top: 0; color: #C25E34;">The LLM KV Cache Memory Wall & Solution</h3>
         <p style="font-size: 0.95rem; line-height: 1.6; color: #3D3630;">
             During autoregressive LLM decoding, the Key-Value (KV) cache grows linearly with context length ($O(N)$), rapidly exhausting host DRAM.
             Conventional offloading moves KV pages to storage, but introduces a crippling <b>PCIe interconnect bus bottleneck</b>: every single candidate Key must be transferred over PCIe just to compute attention dot products on the CPU.
@@ -612,7 +626,7 @@ elif selected_section == "2. ⚡ Executive Summary":
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown("#### 🏆 Canonical Benchmark Evaluation Highlights")
+    st.markdown("#### Canonical Benchmark Evaluation Highlights")
     c_h1, c_h2 = st.columns(2)
     with c_h1:
         st.markdown("""
@@ -643,10 +657,10 @@ elif selected_section == "2. ⚡ Executive Summary":
 
 
 # =====================================================================
-# SECTION 3: 🔬 CANONICAL MODEL BENCHMARKS (4B & 8B)
+# SECTION 3: CANONICAL MODEL BENCHMARKS (4B & 8B)
 # =====================================================================
-elif selected_section == "3. 🔬 Canonical Model Benchmarks":
-    st.markdown('<div class="main-title">🔬 Canonical Model Evaluation (4B FP32 & 8B FP16)</div>', unsafe_allow_html=True)
+elif selected_section == "3. Canonical Model Benchmarks":
+    st.markdown('<div class="main-title">Canonical Model Evaluation (4B FP32 & 8B FP16)</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-title">Side-by-side empirical performance, throughput retention, and host memory savings</div>', unsafe_allow_html=True)
 
     # 4B and 8B Data Extractions
@@ -770,76 +784,114 @@ elif selected_section == "3. 🔬 Canonical Model Benchmarks":
         kv_fig.update_layout(kv_layout)
         st.plotly_chart(kv_fig, width="stretch")
 
-    # Thread Scaling Section
-    st.markdown("---")
-    st.markdown("#### 🧵 CPU Thread Scaling (2, 4, 8 Threads)")
-    st.info("⭐ **Canonical Benchmark Grounding**: 4 threads represents the canonical benchmark specification across all published tables.")
-
-    t_4b = data_threads_4b.get("results", {}) if data_threads_4b else {}
-    t_8b = data_threads_8b if data_threads_8b else {}
-
-    t_rows = []
-    for t in ["2", "4", "8"]:
-        r4 = t_4b.get(t, {})
-        r8 = t_8b.get(t, {})
-        is_canon = " ⭐ [CANONICAL]" if t == "4" else ""
-        t_rows.append({
-            "Threads": f"{t} Threads{is_canon}",
-            "4B Tok/s": fmt_val(r4.get("tokens_per_second"), "tok/s", ".3f"),
-            "4B Wall Time (s)": fmt_val(r4.get("wall_time_s"), "s"),
-            "4B Peak RSS (MB)": fmt_val(r4.get("peak_rss_mb"), "MB"),
-            "8B Tok/s": fmt_val(r8.get("tokens_per_second"), "tok/s", ".3f"),
-            "8B Wall Time (s)": fmt_val(r8.get("wall_time_s"), "s"),
-            "8B Peak RSS (MB)": fmt_val(r8.get("peak_rss_mb"), "MB"),
-        })
-    st.dataframe(pd.DataFrame(t_rows), width="stretch")
-
 
 # =====================================================================
-# SECTION 4: 🏛️ ARCHITECTURE & STORAGE OFFLOAD
+# SECTION 4: ARCHITECTURE & STORAGE OFFLOAD
 # =====================================================================
-elif selected_section == "4. 🏛️ Architecture & Storage Offload":
-    st.markdown('<div class="main-title">🏛️ Co-Designed Computational Storage Architecture</div>', unsafe_allow_html=True)
+elif selected_section == "4. Architecture & Storage Offload":
+    st.markdown('<div class="main-title">Co-Designed Computational Storage Architecture</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-title">Bypassing the PCIe bus bottleneck and eliminating NAND channel serialization</div>', unsafe_allow_html=True)
 
-    st.markdown("""
-    <div class="beige-card">
-        <h4 style="margin-top: 0; color: #C25E34;">End-to-End Computational Storage Pipeline</h4>
-        <pre style="background: #F0EAE1; padding: 14px; border-radius: 8px; font-size: 0.85rem; color: #2C2621; overflow-x: auto;">
-  ┌──────────────────────────────────────────────────────────────┐
-  │                 Host CPU LLM Decoder Execution               │
-  │            Qwen3-4B (FP32) / Qwen3-8B (FP16) Models          │
-  └──────────────────────────────┬───────────────────────────────┘
-                                 │ Attention Queries (q)
-                                 ▼
-  ┌──────────────────────────────────────────────────────────────┐
-  │         P1: Paged KV Engine & Attention Window/Sink          │
-  │     10-20% Recent Tokens Kept Resident in Host CPU DRAM      │
-  └──────────────────────────────┬───────────────────────────────┘
-                                 │ Cold Query Offload
-                                 ▼
-  ┌──────────────────────────────────────────────────────────────┐
-  │         Computational Storage Drive (CSD Virtual Controller) │
-  │    AVX2 128-Dim SIMD Engine Computes Cold In-Storage Top-K   │
-  └──────────────────────────────┬───────────────────────────────┘
-                                 │
-                                 ▼
-  ┌──────────────────────────────────────────────────────────────┐
-  │     8-Channel Tensor-Aware Striped Flash Mapping (FTL)       │
-  │  KV blocks striped across 8 NAND channels (0.86% imbalance)  │
-  └──────────────────────────────┬───────────────────────────────┘
-                                 │ Only Top-10% Winning KV (0 Candidate Keys!)
-                                 ▼
-  ┌──────────────────────────────────────────────────────────────┐
-  │              KV Reconstruction & Staged Attention            │
-  │      Host stitches hot sink/window + winning cold blocks     │
-  └──────────────────────────────────────────────────────────────┘
-        </pre>
+    st.html("""
+<div class="beige-card" style="margin-bottom: 24px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+        <h4 style="margin: 0; color: #C25E34;">End-to-End Computational Storage Pipeline</h4>
+        <span style="font-size: 0.82rem; color: #6C635B; font-weight: 600;">Hardware & Software Co-Design Architecture</span>
     </div>
-    """, unsafe_allow_html=True)
+
+    <div style="display: flex; flex-direction: column; gap: 0; max-width: 950px; margin: 0 auto;">
+
+        <!-- STAGE 1: HOST LLM DECODER -->
+        <div style="background: #FFFDF9; border: 1px solid #E6DFD5; border-left: 5px solid #5A6578; border-radius: 8px; padding: 12px 18px; box-shadow: 0 1px 3px rgba(44,38,33,0.03);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span style="font-weight: 700; font-size: 0.95rem; color: #2C2621;">Stage 1: Host CPU LLM Decoder Execution</span>
+                <span class="badge-real">[HOST CPU]</span>
+            </div>
+            <div style="font-size: 0.85rem; color: #5C554E;">
+                Autoregressive token generation (Qwen3-4B FP32 / Qwen3-8B FP16). Generates attention query vector <b>q</b> for the active decoding step.
+            </div>
+        </div>
+
+        <!-- CONNECTOR 1 -->
+        <div style="display: flex; align-items: center; justify-content: center; padding: 6px 0;">
+            <div style="flex: 1; height: 1px; background: #E6DFD5; max-width: 80px;"></div>
+            <span style="font-size: 0.78rem; font-weight: 600; color: #5A6578; background: #F0EAE1; padding: 2px 12px; border-radius: 12px; margin: 0 8px;">
+                Attention Queries (q) &darr;
+            </span>
+            <div style="flex: 1; height: 1px; background: #E6DFD5; max-width: 80px;"></div>
+        </div>
+
+        <!-- STAGE 2: PAGED KV ENGINE -->
+        <div style="background: #FFFDF9; border: 1px solid #E6DFD5; border-left: 5px solid #5A6578; border-radius: 8px; padding: 12px 18px; box-shadow: 0 1px 3px rgba(44,38,33,0.03);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span style="font-weight: 700; font-size: 0.95rem; color: #2C2621;">Stage 2: P1 Paged KV Engine & Attention Window/Sink</span>
+                <span class="badge-real">[HOST DRAM]</span>
+            </div>
+            <div style="font-size: 0.85rem; color: #5C554E;">
+                10&ndash;20% recent tokens kept resident in host DRAM (attention sink + sliding window). Identifies cold KV pages and triggers offloaded scoring.
+            </div>
+        </div>
+
+        <!-- BUS CROSSING 1 -->
+        <div style="margin: 8px 0; padding: 8px 16px; background: #FAF2EC; border: 1px dashed #C25E34; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem;">
+            <span style="font-weight: 700; color: #C25E34;">PCIe Gen4 x4 Interconnect &mdash; Cold Query Offload &darr;</span>
+            <span style="color: #2D6A4F; font-weight: 600; background: #EBF3ED; padding: 2px 8px; border-radius: 4px; border: 1px solid #D1E5D7;">0 Candidate Keys Sent to Host Bus</span>
+        </div>
+
+        <!-- STAGE 3: CSD CONTROLLER TOP-K -->
+        <div style="background: #FFFDF9; border: 1px solid #E6DFD5; border-left: 5px solid #C25E34; border-radius: 8px; padding: 12px 18px; box-shadow: 0 1px 3px rgba(44,38,33,0.03);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span style="font-weight: 700; font-size: 0.95rem; color: #2C2621;">Stage 3: Computational Storage Drive (CSD Virtual Controller)</span>
+                <span class="badge-virtual">[IN-STORAGE SIMD]</span>
+            </div>
+            <div style="font-size: 0.85rem; color: #5C554E;">
+                AVX2 128-Dim SIMD Engine executes cold in-storage Top-K dot products ⟨q, k⟩ inside controller firmware. Filters out 90% non-critical keys locally, eliminating 564 MB of PCIe bus traffic.
+            </div>
+        </div>
+
+        <!-- CONNECTOR 2 -->
+        <div style="display: flex; align-items: center; justify-content: center; padding: 6px 0;">
+            <div style="flex: 1; height: 1px; background: #E6DFD5; max-width: 80px;"></div>
+            <span style="font-size: 0.78rem; font-weight: 600; color: #2E7D32; background: #EBF3ED; padding: 2px 12px; border-radius: 12px; margin: 0 8px;">
+                Tensor-Aware Striped Access &darr;
+            </span>
+            <div style="flex: 1; height: 1px; background: #E6DFD5; max-width: 80px;"></div>
+        </div>
+
+        <!-- STAGE 4: 8-CHANNEL STRIPED FTL -->
+        <div style="background: #FFFDF9; border: 1px solid #E6DFD5; border-left: 5px solid #2E7D32; border-radius: 8px; padding: 12px 18px; box-shadow: 0 1px 3px rgba(44,38,33,0.03);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span style="font-weight: 700; font-size: 0.95rem; color: #2C2621;">Stage 4: 8-Channel Tensor-Aware Striped Flash Mapping (FTL)</span>
+                <span class="badge-virtual">[NAND MEDIA]</span>
+            </div>
+            <div style="font-size: 0.85rem; color: #5C554E;">
+                Cold KV blocks striped across 8 NAND channels (4 dies/channel, 2 planes/die). Achieves <b>0.86% load imbalance</b> and 10.5 contention ratio (vs 700% imbalance and 83.3 contention on conventional sequential FTL).
+            </div>
+        </div>
+
+        <!-- BUS CROSSING 2 -->
+        <div style="margin: 8px 0; padding: 8px 16px; background: #FAF2EC; border: 1px dashed #C25E34; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem;">
+            <span style="font-weight: 700; color: #C25E34;">PCIe Gen4 x4 Interconnect &mdash; Return Winning KV &darr;</span>
+            <span style="color: #2D6A4F; font-weight: 600; background: #EBF3ED; padding: 2px 8px; border-radius: 4px; border: 1px solid #D1E5D7;">Only Winning 10% KV (57.5 MB) Transferred</span>
+        </div>
+
+        <!-- STAGE 5: RECONSTRUCTION & STAGED ATTENTION -->
+        <div style="background: #FFFDF9; border: 1px solid #E6DFD5; border-left: 5px solid #5A6578; border-radius: 8px; padding: 12px 18px; box-shadow: 0 1px 3px rgba(44,38,33,0.03);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span style="font-weight: 700; font-size: 0.95rem; color: #2C2621;">Stage 5: KV Reconstruction & Staged Attention</span>
+                <span class="badge-real">[HOST CPU]</span>
+            </div>
+            <div style="font-size: 0.85rem; color: #5C554E;">
+                Host CPU stitches hot sink/window tokens with winning cold KV blocks. Computes final staged attention with <b>100% exact greedy token parity (16/16 tokens, 1.000000 cosine similarity)</b>.
+            </div>
+        </div>
+
+    </div>
+</div>
+""")
 
     # In-Storage Compute vs Host-Side Offloading Ablation Table
-    st.markdown("#### 🔬 Root-Cause Bottleneck Isolation (Phase 6 & 7 Ablations)")
+    st.markdown("#### Root-Cause Bottleneck Isolation (Phase 6 & 7 Ablations)")
     st.caption("Empirical proof that in-storage computing is mathematically required to avoid bus flooding")
 
     p7 = data_phase7.get("results", {}) if data_phase7 else {}
@@ -887,7 +939,7 @@ elif selected_section == "4. 🏛️ Architecture & Storage Offload":
 
     # Multi-Channel FTL Comparison
     st.markdown("---")
-    st.markdown("#### ⚡ Multi-Channel FTL Parallelism: Tensor-Aware vs Conventional")
+    st.markdown("#### Multi-Channel FTL Parallelism: Tensor-Aware vs Conventional")
     ftl = data_final_4b.get("ftl_comparison", {}) if data_final_4b else {}
     ta = ftl.get("tensor_aware", {})
     conv = ftl.get("conventional", {})
@@ -917,60 +969,60 @@ elif selected_section == "4. 🏛️ Architecture & Storage Offload":
         """, unsafe_allow_html=True)
 
 
-# =====================================================================
-# SECTION 5: ✅ VERIFICATION & CORRECTNESS
-# =====================================================================
-elif selected_section == "5. ✅ Verification & Correctness":
-    st.markdown('<div class="main-title">✅ Mathematical Correctness & Boundary Disclosures</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-title">Exact token identity against greedy PyTorch baseline and transparent engineering boundaries</div>', unsafe_allow_html=True)
+# # =====================================================================
+# # SECTION 5: VERIFICATION & CORRECTNESS
+# # =====================================================================
+# elif selected_section == "5. Verification & Correctness":
+#     st.markdown('<div class="main-title">Mathematical Correctness & Boundary Disclosures</div>', unsafe_allow_html=True)
+#     st.markdown('<div class="sub-title">Exact token identity against greedy PyTorch baseline and transparent engineering boundaries</div>', unsafe_allow_html=True)
 
-    val_4b = data_final_4b.get("platform", {}).get("expected_token_ids", []) if data_final_4b else []
-    gen_4b = data_final_4b.get("canonical_reproduction", {}).get("token_ids", []) if data_final_4b else []
-    text_4b = data_final_4b.get("canonical_reproduction", {}).get("generated_text", "") if data_final_4b else ""
+#     val_4b = data_final_4b.get("platform", {}).get("expected_token_ids", []) if data_final_4b else []
+#     gen_4b = data_final_4b.get("canonical_reproduction", {}).get("token_ids", []) if data_final_4b else []
+#     text_4b = data_final_4b.get("canonical_reproduction", {}).get("generated_text", "") if data_final_4b else ""
 
-    val_8b = data_base_8b.get("token_validation", {}) if data_base_8b else {}
+#     val_8b = data_base_8b.get("token_validation", {}) if data_base_8b else {}
 
-    v1, v2 = st.columns(2)
-    with v1:
-        st.markdown("""
-        <div class="beige-card">
-            <h4 style="margin-top: 0; color: #2E7D32;">Qwen3-4B FP32 Correctness Verification</h4>
-            <p style="font-size: 0.9rem; color: #3D3630;">
-                <b>Exact Match Status</b>: <span class="badge-real">PASS (16/16 Tokens, 100%)</span><br>
-                <b>Greedy Equivalence</b>: Exact identity with dense PyTorch attention.<br>
-                <b>Cosine Similarity</b>: 1.000000
-            </p>
-            <p style="font-size: 0.85rem; background: #F0EAE1; padding: 8px; border-radius: 6px; color: #2C2621;">
-                <b>Generated Text</b>: " hardware accelerated attention scoring engine computes dot products between the query vector and candidate keys."
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-    with v2:
-        st.markdown("""
-        <div class="beige-card">
-            <h4 style="margin-top: 0; color: #2E7D32;">Qwen3-8B FP16 Correctness Verification</h4>
-            <p style="font-size: 0.9rem; color: #3D3630;">
-                <b>Exact Match Status</b>: <span class="badge-real">PASS (16/16 Tokens, 100%)</span><br>
-                <b>Greedy Equivalence</b>: Exact identity across all 5 benchmark repetitions.<br>
-                <b>Cosine Similarity</b>: 0.999999
-            </p>
-            <p style="font-size: 0.85rem; background: #F0EAE1; padding: 8px; border-radius: 6px; color: #2C2621;">
-                <b>Token Sequence</b>: [11773, 48758, 6529, 19826, 4712, 57203, 12756, 3871, 1948, 279, 3239, 4621, 323, 9144, 6894, 13]
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
+#     v1, v2 = st.columns(2)
+#     with v1:
+#         st.markdown("""
+#         <div class="beige-card">
+#             <h4 style="margin-top: 0; color: #2E7D32;">Qwen3-4B FP32 Correctness Verification</h4>
+#             <p style="font-size: 0.9rem; color: #3D3630;">
+#                 <b>Exact Match Status</b>: <span class="badge-real">PASS (16/16 Tokens, 100%)</span><br>
+#                 <b>Greedy Equivalence</b>: Exact identity with dense PyTorch attention.<br>
+#                 <b>Cosine Similarity</b>: 1.000000
+#             </p>
+#             <p style="font-size: 0.85rem; background: #F0EAE1; padding: 8px; border-radius: 6px; color: #2C2621;">
+#                 <b>Generated Text</b>: " hardware accelerated attention scoring engine computes dot products between the query vector and candidate keys."
+#             </p>
+#         </div>
+#         """, unsafe_allow_html=True)
+#     with v2:
+#         st.markdown("""
+#         <div class="beige-card">
+#             <h4 style="margin-top: 0; color: #2E7D32;">Qwen3-8B FP16 Correctness Verification</h4>
+#             <p style="font-size: 0.9rem; color: #3D3630;">
+#                 <b>Exact Match Status</b>: <span class="badge-real">PASS (16/16 Tokens, 100%)</span><br>
+#                 <b>Greedy Equivalence</b>: Exact identity across all 5 benchmark repetitions.<br>
+#                 <b>Cosine Similarity</b>: 0.999999
+#             </p>
+#             <p style="font-size: 0.85rem; background: #F0EAE1; padding: 8px; border-radius: 6px; color: #2C2621;">
+#                 <b>Token Sequence</b>: [11773, 48758, 6529, 19826, 4712, 57203, 12756, 3871, 1948, 279, 3239, 4621, 323, 9144, 6894, 13]
+#             </p>
+#         </div>
+#         """, unsafe_allow_html=True)
 
-    st.markdown("---")
-    st.markdown("#### 🔬 Engineering Boundaries & Future Silicon Roadmap")
-    st.markdown("""
-    <div class="beige-card">
-        <ul style="font-size: 0.92rem; line-height: 1.7; color: #3D3630; margin-bottom: 0;">
-            <li><b>QEMU NVMe Virtualization vs Physical Silicon <span class="badge-virtual">[VIRTUAL-DEVICE]</span></b>: Real Linux in-kernel NVMe driver requests over <code>/dev/nvme0n1</code> are executed. However, media latency is emulated; physical SSD NAND delays are modeled rather than measured from physical ASIC silicon.</li>
-            <li><b>ASIC In-Storage Compute Emulation</b>: Dot-product scoring is executed using an AVX2 128-dim SIMD C kernel inside the controller guest domain. Production SmartSSDs (e.g. Samsung SmartSSD or ScaleFlux CSD) would eliminate context switching overhead and achieve sub-10μs Top-K filtering.</li>
-            <li><b>Physical NAND Striping</b>: Custom tensor-aware channel striping on commercial off-the-shelf drives requires vendor firmware or Open-Channel/ZNS interfaces (<code>libzbd</code>).</li>
-        </ul>
-    </div>
-    """, unsafe_allow_html=True)
+#     st.markdown("---")
+#     st.markdown("#### Engineering Boundaries & Future Silicon Roadmap")
+#     st.markdown("""
+#     <div class="beige-card">
+#         <ul style="font-size: 0.92rem; line-height: 1.7; color: #3D3630; margin-bottom: 0;">
+#             <li><b>QEMU NVMe Virtualization vs Physical Silicon <span class="badge-virtual">[VIRTUAL-DEVICE]</span></b>: Real Linux in-kernel NVMe driver requests over <code>/dev/nvme0n1</code> are executed. However, media latency is emulated; physical SSD NAND delays are modeled rather than measured from physical ASIC silicon.</li>
+#             <li><b>ASIC In-Storage Compute Emulation</b>: Dot-product scoring is executed using an AVX2 128-dim SIMD C kernel inside the controller guest domain. Production SmartSSDs (e.g. Samsung SmartSSD or ScaleFlux CSD) would eliminate context switching overhead and achieve sub-10μs Top-K filtering.</li>
+#             <li><b>Physical NAND Striping</b>: Custom tensor-aware channel striping on commercial off-the-shelf drives requires vendor firmware or Open-Channel/ZNS interfaces (<code>libzbd</code>).</li>
+#         </ul>
+#     </div>
+#     """, unsafe_allow_html=True)
 
-st.markdown("---")
-st.caption("AI-SSD V2 | Co-Designed Computational Storage & KV Cache Management Evaluation Platform")
+# st.markdown("---")
+# st.caption("AI-SSD V2 | Co-Designed Computational Storage & KV Cache Management Evaluation Platform")
