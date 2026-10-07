@@ -1,0 +1,68 @@
+{
+  "schema_version": "2.0",
+  "timestamp_utc": "2026-10-07T19:19:39Z",
+  "source": "scripts/run_quick_comparison.py",
+  "model": {
+    "name": "Qwen",
+    "full_name": "Qwen-3B",
+    "model_id": "Qwen/Qwen2.5-3B",
+    "weight": "3B",
+    "precision": "fp32",
+    "precision_display": "FP32"
+  },
+  "benchmark": {
+    "mode": "AI-SSD",
+    "context_length": 2048,
+    "decode_tokens": 16,
+    "threads": 4,
+    "storage_mode": "file",
+    "computational_storage": true
+  },
+  "metrics": {
+    "ram_consumption": {
+      "peak_rss_mb": 14216.66,
+      "avg_rss_mb": 14184.98,
+      "min_rss_mb": 14184.79,
+      "vm_peak_mb": 19701.23,
+      "final_rss_mb": 12998.29
+    },
+    "kv_cache": {
+      "active_kv_mb": 16.03,
+      "cold_kv_mb": 142.88,
+      "total_kv_mb": 158.91
+    },
+    "performance": {
+      "wall_time_s": 8.16,
+      "tokens_per_second": 1.961,
+      "latency_ms_per_token": 510.0
+    },
+    "storage_bus": {
+      "candidate_k_bytes_to_host": 0,
+      "winning_kv_bytes_to_host": 230031360,
+      "storage_read_bytes": 57507840,
+      "visible_storage_s": 0.073
+    },
+    "verification": {
+      "exact_token_match": true,
+      "token_ids": [
+        6437,
+        151643,
+        334,
+        14582,
+        25,
+        1019,
+        4340,
+        1558,
+        279,
+        15235,
+        12,
+        1220,
+        35,
+        54480,
+        5819,
+        17646
+      ],
+      "generated_text": " solid<|endoftext|>**Question:**\nHow does the AI-SSD computational storage architecture"
+    }
+  }
+}
