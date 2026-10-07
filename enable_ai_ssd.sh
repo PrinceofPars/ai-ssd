@@ -61,11 +61,21 @@ if (exec 3<>/dev/tcp/127.0.0.1/"$PORT") >/dev/null 2>&1; then
     exit 0
 fi
 
-# 3. Launch QEMU with KVM, NVMe Controller, and Guest Daemon
-# Hardware flags: -enable-kvm -cpu host -m 2048 -smp 2
+LOG_FILE="${RUN_DIR}/qemu.log"
+
+# Detect KVM availability
+KVM_OPTS=()
+if [ -e /dev/kvm ] && [ -w /dev/kvm ]; then
+    KVM_OPTS=(-enable-kvm -cpu host)
+else
+    # Fallback to software emulation if hardware KVM is not available (common on cloud VMs)
+    KVM_OPTS=(-cpu max)
+    TIMEOUT_S=60
+fi
+
+# 3. Launch QEMU with NVMe Controller and Guest Daemon
 nohup qemu-system-x86_64 \
-    -enable-kvm \
-    -cpu host \
+    "${KVM_OPTS[@]}" \
     -m 2048 \
     -smp 2 \
     -no-reboot \
@@ -77,7 +87,7 @@ nohup qemu-system-x86_64 \
     -device virtio-net-pci,netdev=net0 \
     -pidfile "$PID_FILE" \
     -nographic \
-    -append "console=ttyS0 panic=-1 quiet loglevel=3 daemon=1" >/dev/null 2>&1 &
+    -append "console=ttyS0 panic=-1 quiet loglevel=3 daemon=1" >"$LOG_FILE" 2>&1 &
 
 # 4. Wait until the expected device is available via guest daemon port
 ELAPSED=0
@@ -112,6 +122,12 @@ else
     fi
     echo "AI-SSD Firmware: DISABLED"
     echo "Reason: Timeout waiting for NVMe guest daemon on port $PORT after ${TIMEOUT_S}s"
+    if [ -f "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
+        echo "----------------------------------------"
+        echo "QEMU Console Log:"
+        tail -n 15 "$LOG_FILE"
+        echo "----------------------------------------"
+    fi
     echo "========================================"
     exit 1
 fi
