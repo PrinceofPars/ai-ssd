@@ -201,8 +201,8 @@ class TransformerKVStateProvider(StateProvider):
     def append_new_token(self, layer_idx: int, *state_tensors: Any) -> None:
         k_tok, v_tok = state_tensors[0], state_tensors[1]
         ld = self.layer_data[layer_idx]
-        ld["recent_k"] = torch.cat([ld["recent_k"][:, :, 1:, :], k_tok], dim=2)
-        ld["recent_v"] = torch.cat([ld["recent_v"][:, :, 1:, :], v_tok], dim=2)
+        ld["recent_k"] = torch.cat([ld["recent_k"], k_tok], dim=2)
+        ld["recent_v"] = torch.cat([ld["recent_v"], v_tok], dim=2)
         ld["total_tokens"] += 1
 
     def select_and_fetch_active_state(

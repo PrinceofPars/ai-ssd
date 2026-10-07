@@ -88,10 +88,18 @@ def print_comparison(baseline_json: str, aissd_json: str, model_name: str):
     print(f"{'Active KV in Host RAM':<32} | {b.get('active_kv_mb', 0):>17.2f} MB | {a.get('active_kv_mb', 0):>16.2f} MB")
     print(f"{'Cold KV on Disk':<32} | {b.get('cold_kv_mb', 0):>17.2f} MB | {a.get('cold_kv_mb', 0):>16.2f} MB")
     
-    # cand_bytes = a.get("candidate_k_bytes_to_host", 0)
-    # cand_str = f"{cand_bytes} B (Zero-Bus)" if cand_bytes == 0 else f"{cand_bytes} B"
-    # print(f"{'Candidate K to Host Bus':<32} | {'All in RAM':>20} | {cand_str:>20}")
-    
+    b_read_mb = b.get("total_read_mb", 0.0)
+    a_read_mb = a.get("total_read_mb", round(a.get("storage_read_bytes", 0) / (1024.0 * 1024.0), 2))
+    b_write_mb = b.get("total_write_mb", 0.0)
+    a_write_mb = a.get("total_write_mb", round(a.get("storage_write_bytes", 0) / (1024.0 * 1024.0), 2))
+
+    print(f"{'Total Read MB':<32} | {b_read_mb:>17.2f} MB | {a_read_mb:>16.2f} MB")
+    print(f"{'Total Write MB':<32} | {b_write_mb:>17.2f} MB | {a_write_mb:>16.2f} MB")
+
+    cand_bytes = a.get("candidate_k_bytes_to_host", 0)
+    cand_str = f"{cand_bytes} B (Zero-Bus)" if cand_bytes == 0 else f"{cand_bytes} B"
+    print(f"{'Candidate K to Host Bus':<32} | {'0 B (Host RAM)':>20} | {cand_str:>20}")
+
     b_tps = b.get("tokens_per_second", 0)
     a_tps = a.get("tokens_per_second", 0)
     print(f"{'Decode Throughput':<32} | {b_tps:>15.2f} tok/s | {a_tps:>14.2f} tok/s")
@@ -105,9 +113,10 @@ def print_comparison(baseline_json: str, aissd_json: str, model_name: str):
         matches = sum(1 for x, y in zip(b_tokens, a_tokens) if x == y)
         total = min(len(b_tokens), len(a_tokens))
         pct = (matches / total) * 100.0 if total > 0 else 0.0
-        # print(f"Token Parity       : {matches}/{total} tokens identical ({pct:.1f}% match)")
-    # print(f"Baseline Generated : {repr(b.get('generated_text', ''))[:60]}...")
-    # print(f"AI-SSD Generated   : {repr(a.get('generated_text', ''))[:60]}...")
+        status = "EXACT MATCH (PASS)" if matches == total else f"DIVERGENT ({matches}/{total})"
+        print(f"Token Parity       : {matches}/{total} tokens identical ({pct:.1f}% match) [{status}]")
+    print(f"Baseline Generated : {repr(b.get('generated_text', ''))[:80]}")
+    print(f"AI-SSD Generated   : {repr(a.get('generated_text', ''))[:80]}")
     print("=" * 80 + "\n")
 
 

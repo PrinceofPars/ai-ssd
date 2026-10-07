@@ -1,3 +1,6 @@
+
+
+
 """Real Qwen2.5-0.5B Inference Engine with AI-SSD KV-Cache Integration.
 
 Implements two genuinely executable inference modes:
@@ -19,6 +22,13 @@ import gc
 import logging
 import psutil
 import threading
+def _get_storage_byte_counters(b: Any) -> Tuple[int, int]:
+    s = getattr(b, "storage_backend", b)
+    nvme = getattr(s, "_nvme_client", None)
+    if nvme is not None and hasattr(nvme, "total_read_bytes"):
+        return nvme.total_read_bytes, nvme.total_write_bytes
+    return getattr(s, "bytes_read", 0), getattr(s, "bytes_written", 0)
+
 import torch
 import numpy as np
 from transformers.models.qwen2.modeling_qwen2 import apply_rotary_pos_emb
@@ -526,7 +536,17 @@ def run_baseline_decode(
         "storage_requests": 0,
         "token_ids": generated_tokens,
         "generated_text": generated_text,
-        "final_logits": step_logits[-1].cpu().numpy(),
+        "final_logits": step_logits[-1].to(torch.float32).cpu().numpy(),
+        "total_read_bytes": 0,
+        "total_write_bytes": 0,
+        "total_read_mb": 0.0,
+        "total_write_mb": 0.0,
+        "inference_read_mb": 0.0,
+        "inference_write_mb": 0.0,
+        "decode_read_mb": 0.0,
+        "decode_write_mb": 0.0,
+        "candidate_k_bytes_to_host": 0,
+        "winning_kv_bytes_to_host": 0,
     }
 
 
@@ -678,12 +698,17 @@ def run_aissd_decode(
                 layer.self_attn.forward = orig_forwards[i]
 
     total_model_forward_s = 0.0
+    pre_read_0, pre_write_0 = _get_storage_byte_counters(backend)
     try:
         # 1. Prefill step
         with torch.no_grad():
             prefill_out = model(input_ids=input_ids, use_cache=True)
         pkv_prefill = prefill_out.past_key_values
         kv_mgr.init_from_prefill(pkv_prefill)
+
+        pre_read_1, pre_write_1 = _get_storage_byte_counters(backend)
+        prefill_write_bytes = max(0, pre_write_1 - pre_write_0)
+        prefill_read_bytes = max(0, pre_read_1 - pre_read_0)
 
         # Reset backend counters and KV manager timers to measure strictly decode traffic
         backend.reset_stats()
@@ -820,6 +845,14 @@ def run_aissd_decode(
         "wall_time_s": round(wall_time, 4),
     }
 
+    dec_read, dec_write = _get_storage_byte_counters(backend)
+    total_inf_read_bytes = prefill_read_bytes + dec_read
+    total_inf_write_bytes = prefill_write_bytes + dec_write
+    tot_read_mb = total_inf_read_bytes / (1024.0 * 1024.0)
+    tot_write_mb = total_inf_write_bytes / (1024.0 * 1024.0)
+    dec_read_mb = dec_read / (1024.0 * 1024.0)
+    dec_write_mb = dec_write / (1024.0 * 1024.0)
+
     result = {
         "mode": "AI-SSD",
         "wall_time_s": wall_time,
@@ -835,13 +868,24 @@ def run_aissd_decode(
         "kv_offloaded_pct": mem_stats["offload_pct"],
         "kv_blocks_read": getattr(backend, "blocks_read", 0),
         "storage_backend": storage_backend_name,
-        "storage_bytes_read": getattr(backend, "bytes_read", 0),
+        "storage_bytes_read": total_inf_read_bytes,
+        "storage_bytes_written": total_inf_write_bytes,
+        "storage_read_bytes": total_inf_read_bytes,
+        "storage_write_bytes": total_inf_write_bytes,
+        "total_read_bytes": total_inf_read_bytes,
+        "total_write_bytes": total_inf_write_bytes,
+        "total_read_mb": round(tot_read_mb, 4),
+        "total_write_mb": round(tot_write_mb, 4),
+        "inference_read_mb": round(tot_read_mb, 4),
+        "inference_write_mb": round(tot_write_mb, 4),
+        "decode_read_mb": round(dec_read_mb, 4),
+        "decode_write_mb": round(dec_write_mb, 4),
         "storage_requests": getattr(backend, "requests", 0),
         "storage_batches": getattr(backend, "storage_batches", 0),
         "avg_batch_size": (getattr(backend, "requests", 0) / max(1, getattr(backend, "storage_batches", 1))) if getattr(backend, "storage_batches", 0) > 0 else 1.0,
         "token_ids": generated_tokens,
         "generated_text": generated_text,
-        "final_logits": step_logits[-1].cpu().numpy(),
+        "final_logits": step_logits[-1].to(torch.float32).cpu().numpy(),
         "timing_breakdown": timing_breakdown,
         "enable_computational_storage": enable_computational_storage,
         "enable_async_pipeline": enable_async_pipeline,

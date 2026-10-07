@@ -94,7 +94,7 @@ class ModelArchitectureConfig:
         if self.layer_types is None:
             return True
         if 0 <= layer_idx < len(self.layer_types):
-            return self.layer_types[layer_idx] in ("attention", "self_attn", "attn")
+            return self.layer_types[layer_idx] in ("attention", "self_attn", "attn", "full_attention")
         return True
 
     def is_layer_ssm(self, layer_idx: int) -> bool:

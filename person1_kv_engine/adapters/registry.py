@@ -68,7 +68,7 @@ def save_custom_model(model_key: str, entry: Dict[str, Any]) -> None:
 KNOWN_MODELS: Dict[str, Dict[str, Any]] = {
     "qwen3-4b": {
         "model_id": "Qwen/Qwen3-4B-Instruct-2507",
-        "architecture": "qwen2",
+        "architecture": "qwen3",
         "model_family": "transformer",
         "params": "4.02B",
         "default_precision": "fp32",
@@ -76,10 +76,10 @@ KNOWN_MODELS: Dict[str, Dict[str, Any]] = {
         "supported_contexts": [512, 1024, 2048, 4096, 8192, 16384, 32768],
         "attention_type": "GQA",
         "num_layers": 36,
-        "num_attention_heads": 16,
-        "num_key_value_heads": 4,
+        "num_attention_heads": 32,
+        "num_key_value_heads": 8,
         "head_dim": 128,
-        "hidden_size": 2048,
+        "hidden_size": 2560,
         "vocab_size": 151936,
         "compatibility_level": CompatibilityLevel.FULL,
         "compatibility_reason": "Validated canonical V2 release",
@@ -91,7 +91,7 @@ KNOWN_MODELS: Dict[str, Dict[str, Any]] = {
     },
     "qwen3-8b": {
         "model_id": "Qwen/Qwen3-8B",
-        "architecture": "qwen2",
+        "architecture": "qwen3",
         "model_family": "transformer",
         "params": "8.19B",
         "default_precision": "fp16",
@@ -164,6 +164,7 @@ KNOWN_MODELS: Dict[str, Dict[str, Any]] = {
         "hidden_size": 4096,
         "vocab_size": 248320,
         "has_separable_kv_cache": True,
+        "layer_types": ["full_attention" if i in (3, 7, 11, 15, 19, 23, 27, 31) else "linear_attention" for i in range(32)],
         "compatibility_level": CompatibilityLevel.PARTIAL,
         "compatibility_reason": "Hybrid Attention + Linear SSM: 8 Full GQA Attention layers offloaded to AI-SSD, 24 Linear Attention SSM layers resident in DRAM",
     },
@@ -251,6 +252,8 @@ class ModelRegistry:
     _adapter_classes: Dict[str, Type[ModelAdapter]] = {
         "qwen2": QwenAdapter,
         "qwen": QwenAdapter,
+        "qwen3": QwenAdapter,
+        "qwen3_instruct": QwenAdapter,
         "mistral": MistralAdapter,
         "llama": MistralAdapter,  # LLaMA shares rotary and SDPA attention interface with Mistral
         "jamba": HybridJambaAdapter,
@@ -290,6 +293,7 @@ class ModelRegistry:
                 supported_contexts=entry["supported_contexts"],
                 attention_type=entry["attention_type"],
                 sliding_window=entry.get("sliding_window"),
+                layer_types=entry.get("layer_types"),
                 compatibility_level=entry["compatibility_level"],
                 compatibility_reason=entry["compatibility_reason"],
                 param_count=entry.get("params"),
@@ -349,6 +353,7 @@ class ModelRegistry:
         head_dim = getattr(text_cfg, "head_dim", (hidden_size // num_attn_heads) if num_attn_heads > 0 else 64)
         vocab_size = getattr(text_cfg, "vocab_size", 0)
         sliding_window = getattr(text_cfg, "sliding_window", None)
+        layer_types = getattr(text_cfg, "layer_types", None)
 
         if num_kv_heads == 1 and num_attn_heads > 1:
             attn_type = "MQA"
@@ -394,6 +399,7 @@ class ModelRegistry:
             supported_contexts=[512, 1024, 2048, 4096],
             attention_type=attn_type,
             sliding_window=sliding_window,
+            layer_types=layer_types,
             compatibility_level=comp_level,
             compatibility_reason=reason,
         )

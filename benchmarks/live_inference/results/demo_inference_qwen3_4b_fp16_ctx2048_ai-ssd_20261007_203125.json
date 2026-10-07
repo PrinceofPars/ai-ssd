@@ -1,0 +1,68 @@
+{
+  "schema_version": "2.0",
+  "timestamp_utc": "2026-10-07T20:31:25Z",
+  "source": "scripts/demo_inference.py",
+  "model": {
+    "name": "Qwen3",
+    "full_name": "Qwen3-4B",
+    "model_id": "Qwen/Qwen3-4B",
+    "weight": "4B",
+    "precision": "fp16",
+    "precision_display": "FP16"
+  },
+  "benchmark": {
+    "mode": "AI-SSD",
+    "context_length": 2048,
+    "decode_tokens": 16,
+    "threads": 4,
+    "storage_mode": "nvme_qemu",
+    "computational_storage": true
+  },
+  "metrics": {
+    "ram_consumption": {
+      "peak_rss_mb": 9311.7,
+      "avg_rss_mb": 9311.66,
+      "min_rss_mb": 9310.9,
+      "vm_peak_mb": 17848.14,
+      "final_rss_mb": 8718.31
+    },
+    "kv_cache": {
+      "active_kv_mb": 32.06,
+      "cold_kv_mb": 285.75,
+      "total_kv_mb": 317.81
+    },
+    "performance": {
+      "wall_time_s": 10.629,
+      "tokens_per_second": 1.505,
+      "latency_ms_per_token": 664.3
+    },
+    "storage_bus": {
+      "candidate_k_bytes_to_host": 0,
+      "winning_kv_bytes_to_host": 460062720,
+      "storage_read_bytes": 460062720,
+      "visible_storage_s": 2.743
+    },
+    "verification": {
+      "exact_token_match": true,
+      "token_ids": [
+        6437,
+        44868,
+        1112,
+        107848,
+        51030,
+        198,
+        100627,
+        367,
+        198,
+        101890,
+        367,
+        374,
+        1473,
+        59,
+        1124,
+        367
+      ],
+      "generated_text": " solid approximate...\u96c6\u5408...\n\n\n\n\u63d0\u9ad8ation\n\u63a8\u52a8ation is show\\ \\ation"
+    }
+  }
+}

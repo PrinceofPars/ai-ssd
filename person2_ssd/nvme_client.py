@@ -333,7 +333,7 @@ class QemuNvmeClient:
 
             total_elapsed = pack_elapsed + send_elapsed + wait_elapsed + recv_elapsed
             self.read_ops += num_cands
-            self.total_read_bytes += total_internal_k_bytes
+            self.total_read_bytes += resp_items * 12
             self.total_read_time_s += total_elapsed
             self.total_pack_time_s += pack_elapsed
             self.total_send_time_s += send_elapsed

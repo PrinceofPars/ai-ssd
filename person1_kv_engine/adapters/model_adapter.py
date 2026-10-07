@@ -324,6 +324,20 @@ class HybridJambaAdapter(ModelAdapter):
         return orig_forwards, restore
 
 
+
+def get_model_layers(model: torch.nn.Module) -> Any:
+    """Universally resolves transformer decoder layers across distinct architectures."""
+    if hasattr(model, "model"):
+        if hasattr(model.model, "language_model") and hasattr(model.model.language_model, "layers"):
+            return model.model.language_model.layers
+        if hasattr(model.model, "layers"):
+            return model.model.layers
+    if hasattr(model, "language_model") and hasattr(model.language_model, "layers"):
+        return model.language_model.layers
+    if hasattr(model, "layers"):
+        return model.layers
+    raise AttributeError(f"Cannot find transformer layers in model of type {type(model)}")
+
 class HybridQwen35Adapter(ModelAdapter):
     """Adapter for Qwen 3.5 hybrid architecture (linear_attn SSM + full self_attn GQA with output gating)."""
 
@@ -360,8 +374,9 @@ class HybridQwen35Adapter(ModelAdapter):
             except ImportError:
                 apply_rotary_pos_emb = None
 
+        layers = get_model_layers(model)
         orig_forwards = {}
-        for i, layer in enumerate(model.model.layers):
+        for i, layer in enumerate(layers):
             if hasattr(layer, "self_attn") and layer.self_attn is not None:
                 attn = layer.self_attn
                 orig_forwards[i] = attn.forward
@@ -372,7 +387,7 @@ class HybridQwen35Adapter(ModelAdapter):
                             return original_fwd(hidden_states, position_embeddings, attention_mask=attention_mask, past_key_values=past_key_values, **kwargs)
 
                         t_attn_fwd_start = time.perf_counter()
-                        attn_module = model.model.layers[layer_idx].self_attn
+                        attn_module = layers[layer_idx].self_attn
                         input_shape = hidden_states.shape[:-1]
                         hidden_shape = (*input_shape, -1, attn_module.head_dim)
 
@@ -413,7 +428,7 @@ class HybridQwen35Adapter(ModelAdapter):
                         out = torch.nn.functional.scaled_dot_product_attention(
                             q, act_k, act_v, scale=scaling, enable_gqa=True
                         )
-                        out = out.reshape(*input_shape, -1).contiguous()
+                        out = out.transpose(1, 2).reshape(*input_shape, -1).contiguous()
                         # Apply Qwen 3.5 attention output gating
                         out = out * torch.sigmoid(gate)
                         model_timings["attn_matmul_s"] += time.perf_counter() - t_attn
@@ -430,7 +445,7 @@ class HybridQwen35Adapter(ModelAdapter):
                 attn.forward = make_qwen35_attn_fwd(i, orig_forwards[i])
 
         def restore():
-            for i, layer in enumerate(model.model.layers):
+            for i, layer in enumerate(layers):
                 if i in orig_forwards:
                     layer.self_attn.forward = orig_forwards[i]
 
