@@ -143,6 +143,13 @@ def run_worker():
             "avg_rss_mb": res["avg_rss_mb"],
             "peak_rss_mb": res["peak_rss_mb"],
             "std_rss_mb": res.get("std_rss_mb", 0.0),
+            "model_load_peak_rss_mb": round(mem_model["vm_rss_mb"], 2),
+            "prefill_peak_rss_mb": round(res.get("prefill_peak_rss_mb", res["peak_rss_mb"]), 2),
+            "post_prefill_rss_mb": round(res.get("post_prefill_rss_mb", res["min_rss_mb"]), 2),
+            "decode_peak_rss_mb": round(res.get("decode_peak_rss_mb", res["peak_rss_mb"]), 2),
+            "overall_peak_rss_mb": round(res.get("overall_peak_rss_mb", res["peak_rss_mb"]), 2),
+            "prefill_time_s": round(res.get("prefill_time_s", 0.0), 3),
+            "decode_time_s": round(res.get("decode_time_s", res["wall_time_s"]), 3),
             "vm_peak_mb": mem_final["vm_peak_mb"],
             "rss_anon_mb": mem_final["rss_anon_mb"],
             "final_rss_mb": mem_final["vm_rss_mb"],
@@ -263,6 +270,13 @@ def run_worker():
                 "avg_rss_mb": res["avg_rss_mb"],
                 "peak_rss_mb": res["peak_rss_mb"],
                 "std_rss_mb": res.get("std_rss_mb", 0.0),
+                "model_load_peak_rss_mb": round(mem_model["vm_rss_mb"], 2),
+                "prefill_peak_rss_mb": round(res.get("prefill_peak_rss_mb", res["peak_rss_mb"]), 2),
+                "post_prefill_rss_mb": round(res.get("post_prefill_rss_mb", res["min_rss_mb"]), 2),
+                "decode_peak_rss_mb": round(res.get("decode_peak_rss_mb", res["peak_rss_mb"]), 2),
+                "overall_peak_rss_mb": round(res.get("overall_peak_rss_mb", res["peak_rss_mb"]), 2),
+                "prefill_time_s": round(res.get("prefill_time_s", 0.0), 3),
+                "decode_time_s": round(res.get("decode_time_s", res["wall_time_s"]), 3),
                 "vm_peak_mb": mem_final["vm_peak_mb"],
                 "rss_anon_mb": mem_final["rss_anon_mb"],
                 "final_rss_mb": mem_final["vm_rss_mb"],
@@ -314,7 +328,7 @@ def run_worker():
     with open(args.output_json, "w") as f:
         json.dump(output_data, f, indent=2)
 
-    print(f"[{args.mode.upper()}] Run completed. Decode RSS min/avg/peak: {output_data['min_rss_mb']:.1f}/{output_data['avg_rss_mb']:.1f}/{output_data['peak_rss_mb']:.1f} MB, tok/s: {output_data['tokens_per_second']:.2f}")
+    print(f"[{args.mode.upper()}] Run completed. RSS (Prefill/Post/Decode Peak): {output_data['prefill_peak_rss_mb']:.1f} / {output_data['post_prefill_rss_mb']:.1f} / {output_data['decode_peak_rss_mb']:.1f} MB (Overall Peak: {output_data['overall_peak_rss_mb']:.1f} MB), tok/s: {output_data['tokens_per_second']:.2f}")
 
 
 if __name__ == "__main__":
