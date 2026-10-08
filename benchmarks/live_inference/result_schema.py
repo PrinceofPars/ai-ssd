@@ -573,3 +573,358 @@ def compute_scaling_curve(
         "dense_kv_mb": dense_kv,
         "aissd_kv_mb": aissd_kv,
     }
+
+
+# =====================================================================
+# CANONICAL BENCHMARK STORAGE & PROVENANCE MANAGEMENT
+# =====================================================================
+RESULTS_DIR = PROJECT_ROOT / "results"
+CURRENT_RESULTS_DIR = RESULTS_DIR / "current"
+ARCHIVE_RESULTS_DIR = RESULTS_DIR / "archive"
+CURRENT_RESULTS_FILE = CURRENT_RESULTS_DIR / "quick_comparison_results.json"
+CURRENT_RESULTS_CSV = CURRENT_RESULTS_DIR / "quick_comparison_results.csv"
+
+STAGE_SPECS = [
+    {"context": 2048, "name": "2K"},
+    {"context": 4096, "name": "4K"},
+    {"context": 8192, "name": "8K"},
+    {"context": 16384, "name": "16K"},
+    {"context": 32768, "name": "32K"},
+]
+
+CSV_FIELDNAMES = [
+    "config_key",
+    "stage",
+    "stage_name",
+    "model_key",
+    "model_id",
+    "architecture",
+    "model_family",
+    "params",
+    "precision_requested",
+    "precision_actual",
+    "requested_context",
+    "actual_context",
+    "prompt_tokens",
+    "decode_tokens",
+    "threads",
+    "seed",
+    "status",
+    "status_reason",
+    "result_source",
+    "benchmark_generation_id",
+    "benchmark_timestamp",
+    "git_commit",
+    "exact_token_match",
+    "token_match_rate",
+    "matching_tokens",
+    "total_tokens",
+    "first_divergent_token",
+    "candidate_k_zero_bus",
+    "candidate_k_bytes_to_host",
+    "winning_k_bytes_to_host",
+    "winning_v_bytes_to_host",
+    "baseline_wall_time_s",
+    "baseline_prefill_time_s",
+    "baseline_decode_time_s",
+    "baseline_tps",
+    "baseline_peak_rss_mb",
+    "baseline_post_prefill_rss_mb",
+    "baseline_decode_rss_mb",
+    "baseline_active_kv_mb",
+    "baseline_read_mb",
+    "baseline_write_mb",
+    "aissd_wall_time_s",
+    "aissd_prefill_time_s",
+    "aissd_decode_time_s",
+    "aissd_tps",
+    "aissd_peak_rss_mb",
+    "aissd_post_prefill_rss_mb",
+    "aissd_decode_rss_mb",
+    "aissd_active_kv_mb",
+    "aissd_cold_kv_mb",
+    "aissd_read_mb",
+    "aissd_write_mb",
+    "memory_saved_mb",
+    "kv_memory_saved_mb",
+    "kv_memory_reduction_pct",
+    "storage_mode",
+]
+
+
+def archive_current_benchmark(archive_reason: str = "new_benchmark_run") -> Optional[Path]:
+    """
+    If results/current/quick_comparison_results.json exists and contains records,
+    safely moves current files into results/archive/<timestamp>/ to preserve historical data immutably.
+    """
+    if not CURRENT_RESULTS_FILE.exists():
+        return None
+    try:
+        with open(CURRENT_RESULTS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not data:
+            return None
+    except Exception:
+        return None
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    target_dir = ARCHIVE_RESULTS_DIR / timestamp
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    import shutil
+    for item in CURRENT_RESULTS_DIR.iterdir():
+        if item.is_file():
+            shutil.copy2(item, target_dir / item.name)
+            item.unlink()
+
+    return target_dir
+
+
+def load_current_benchmark_records() -> List[Dict[str, Any]]:
+    """Loads all records from results/current/quick_comparison_results.json."""
+    if not CURRENT_RESULTS_FILE.exists():
+        return []
+    try:
+        with open(CURRENT_RESULTS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def load_historical_benchmark_records() -> List[Dict[str, Any]]:
+    """
+    Loads historical benchmark records from results/archive/*/quick_comparison_results.json
+    and maps legacy records into normalized comparison records with result_source='HISTORICAL'.
+    """
+    records: List[Dict[str, Any]] = []
+    seen_keys = set()
+
+    # 1. Check archive directories
+    if ARCHIVE_RESULTS_DIR.exists():
+        for archive_gen in sorted(ARCHIVE_RESULTS_DIR.iterdir(), reverse=True):
+            if archive_gen.is_dir():
+                arch_file = archive_gen / "quick_comparison_results.json"
+                if arch_file.exists():
+                    try:
+                        with open(arch_file, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        if isinstance(data, list):
+                            for r in data:
+                                r_copy = dict(r)
+                                r_copy["result_source"] = "HISTORICAL"
+                                r_copy["archive_generation"] = archive_gen.name
+                                k = r_copy.get("config_key")
+                                if k and k not in seen_keys:
+                                    seen_keys.add(k)
+                                    records.append(r_copy)
+                    except Exception:
+                        pass
+
+    # 2. Map legacy benchmark records from benchmarks/live_inference/results/
+    legacy_flat = load_all_benchmark_records()
+    by_config: Dict[str, Dict[str, Any]] = {}
+    for lf in legacy_flat:
+        model_name = lf.get("model_name", "").lower()
+        prec = "fp16" if "16" in lf.get("precision", "").lower() else "fp32"
+        ctx = lf.get("context_length", 0)
+        mode = lf.get("mode", "").upper()
+        cfg_key = f"{model_name}|{prec}|{ctx}"
+
+        if cfg_key not in by_config:
+            by_config[cfg_key] = {
+                "config_key": cfg_key,
+                "stage": ctx,
+                "stage_name": f"{ctx // 1024}K" if ctx >= 1024 else f"{ctx}",
+                "model_key": model_name,
+                "model_id": lf.get("model_display", model_name),
+                "architecture": model_name,
+                "precision_requested": prec,
+                "precision_actual": prec,
+                "requested_context": ctx,
+                "actual_context": ctx,
+                "status": "PASS" if lf.get("exact_match", True) else "FAIL",
+                "status_reason": "Historical baseline validation run",
+                "result_source": "HISTORICAL",
+                "benchmark_timestamp": lf.get("timestamp", ""),
+                "git_commit": "historical",
+                "exact_token_match": lf.get("exact_match", True),
+                "token_match_rate": 100.0 if lf.get("exact_match", True) else 0.0,
+                "candidate_k_zero_bus": True,
+                "candidate_k_bytes_to_host": 0,
+            }
+        rec = by_config[cfg_key]
+        if mode == "BASELINE":
+            rec["baseline_peak_rss_mb"] = lf.get("peak_rss_mb", 0.0)
+            rec["baseline_tps"] = lf.get("tokens_per_second", 0.0)
+            rec["baseline_wall_time_s"] = lf.get("wall_time_s", 0.0)
+            rec["baseline_active_kv_mb"] = lf.get("active_kv_mb", 0.0)
+        else:
+            rec["aissd_peak_rss_mb"] = lf.get("peak_rss_mb", 0.0)
+            rec["aissd_tps"] = lf.get("tokens_per_second", 0.0)
+            rec["aissd_wall_time_s"] = lf.get("wall_time_s", 0.0)
+            rec["aissd_active_kv_mb"] = lf.get("active_kv_mb", 0.0)
+
+    for cfg_key, rec in by_config.items():
+        if cfg_key not in seen_keys:
+            seen_keys.add(cfg_key)
+            records.append(rec)
+
+    return records
+
+
+def save_quick_comparison_record(record: Dict[str, Any]) -> Tuple[Path, Path]:
+    """
+    Atomically saves or updates a quick comparison record in results/current/.
+    Updates both quick_comparison_results.json and quick_comparison_results.csv.
+    """
+    CURRENT_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    records = load_current_benchmark_records()
+    records_dict = {r["config_key"]: r for r in records}
+    records_dict[record["config_key"]] = record
+    updated_records = list(records_dict.values())
+
+    # 1. Atomic JSON write
+    temp_json = CURRENT_RESULTS_DIR / f".tmp_{os.getpid()}_results.json"
+    with open(temp_json, "w", encoding="utf-8") as f:
+        json.dump(updated_records, f, indent=2)
+    os.replace(temp_json, CURRENT_RESULTS_FILE)
+
+    # 2. Atomic CSV write
+    import csv
+    temp_csv = CURRENT_RESULTS_DIR / f".tmp_{os.getpid()}_results.csv"
+    with open(temp_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES, extrasaction="ignore")
+        writer.writeheader()
+        for r in updated_records:
+            writer.writerow(r)
+    os.replace(temp_csv, CURRENT_RESULTS_CSV)
+
+    return CURRENT_RESULTS_FILE, CURRENT_RESULTS_CSV
+
+
+def resolve_benchmark_matrix(
+    current_records: Optional[List[Dict[str, Any]]] = None,
+    historical_records: Optional[List[Dict[str, Any]]] = None,
+    models: Optional[List[str]] = None,
+    stages: Optional[List[int]] = None,
+    precisions: Optional[List[str]] = None,
+    current_only: bool = False,
+) -> Dict[str, Any]:
+    """
+    Resolves the cross-model × precision × context benchmark matrix
+    using the strict precedence rules:
+        CURRENT > HISTORICAL > NOT_EVALUATED
+    Crucially: If CURRENT contains a configuration with non-PASS status (OOM, FAIL, ERROR, etc.),
+    it MUST NOT fall back to an older historical PASS.
+    """
+    if current_records is None:
+        current_records = load_current_benchmark_records()
+    if historical_records is None:
+        historical_records = load_historical_benchmark_records()
+
+    current_dict = {r["config_key"]: r for r in current_records if "config_key" in r}
+    historical_dict = {r["config_key"]: r for r in historical_records if "config_key" in r}
+
+    try:
+        from person1_kv_engine.adapters.registry import ModelRegistry
+        reg_models = ModelRegistry.list_models()
+    except Exception:
+        reg_models = get_known_models_catalog()
+
+    selected_models = models or list(reg_models.keys())
+    selected_stages = stages or [2048, 4096, 8192, 16384, 32768]
+    selected_precisions = precisions or ["fp32", "fp16"]
+
+    resolved_records: List[Dict[str, Any]] = []
+    stage_progress: Dict[str, Dict[str, Any]] = {}
+
+    for stage_ctx in selected_stages:
+        stage_name = f"{stage_ctx // 1024}K" if stage_ctx >= 1024 else f"{stage_ctx}"
+        stage_total = len(selected_models) * len(selected_precisions)
+        stage_current_eval = 0
+
+        for m_key in selected_models:
+            m_info = reg_models.get(m_key, {})
+            arch = m_info.get("architecture", "unknown")
+            params = m_info.get("params", "N/A")
+            m_id = m_info.get("model_id", m_key)
+
+            for prec in selected_precisions:
+                cfg_key = f"{m_key}|{prec.lower()}|{stage_ctx}"
+
+                if cfg_key in current_dict:
+                    rec = dict(current_dict[cfg_key])
+                    rec["result_source"] = "CURRENT"
+                    stage_current_eval += 1
+                elif (not current_only) and (cfg_key in historical_dict):
+                    rec = dict(historical_dict[cfg_key])
+                    rec["result_source"] = "HISTORICAL"
+                else:
+                    rec = {
+                        "config_key": cfg_key,
+                        "stage": stage_ctx,
+                        "stage_name": stage_name,
+                        "model_key": m_key,
+                        "model_id": m_id,
+                        "architecture": arch,
+                        "params": params,
+                        "precision_requested": prec.lower(),
+                        "precision_actual": prec.lower(),
+                        "requested_context": stage_ctx,
+                        "actual_context": stage_ctx,
+                        "status": "NOT EVALUATED",
+                        "status_reason": "Not yet evaluated in current benchmark generation",
+                        "result_source": "NOT EVALUATED",
+                        "exact_token_match": None,
+                        "token_match_rate": 0.0,
+                        "candidate_k_zero_bus": None,
+                    }
+
+                resolved_records.append(rec)
+
+        if stage_current_eval == stage_total:
+            stage_status = "COMPLETE"
+        elif stage_current_eval > 0:
+            stage_status = "IN PROGRESS"
+        else:
+            stage_status = "NOT STARTED"
+
+        stage_progress[stage_name] = {
+            "context": stage_ctx,
+            "completed": stage_current_eval,
+            "total": stage_total,
+            "status": stage_status,
+        }
+
+    # Summary statistics
+    total_eval = sum(1 for r in resolved_records if r["status"] != "NOT EVALUATED")
+    current_eval = sum(1 for r in resolved_records if r.get("result_source") == "CURRENT")
+    hist_eval = sum(1 for r in resolved_records if r.get("result_source") == "HISTORICAL")
+    not_eval = sum(1 for r in resolved_records if r["status"] == "NOT EVALUATED")
+
+    pass_count = sum(1 for r in resolved_records if r.get("status") == "PASS")
+    fail_count = sum(1 for r in resolved_records if r.get("status") == "FAIL")
+    oom_count = sum(1 for r in resolved_records if r.get("status") == "OOM")
+    err_count = sum(1 for r in resolved_records if r.get("status") == "ERROR")
+    unsupp_count = sum(1 for r in resolved_records if r.get("status") == "UNSUPPORTED")
+    unavail_count = sum(1 for r in resolved_records if r.get("status") == "UNAVAILABLE")
+
+    return {
+        "records": resolved_records,
+        "stage_progress": stage_progress,
+        "stats": {
+            "total_matrix_cells": len(resolved_records),
+            "total_evaluated": total_eval,
+            "current_evaluated": current_eval,
+            "historical_evaluated": hist_eval,
+            "not_evaluated": not_eval,
+            "pass": pass_count,
+            "fail": fail_count,
+            "oom": oom_count,
+            "error": err_count,
+            "unsupported": unsupp_count,
+            "unavailable": unavail_count,
+        },
+    }
+

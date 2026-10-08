@@ -26,6 +26,13 @@ from benchmarks.live_inference.result_schema import (
     get_known_models_catalog,
     compute_scaling_curve,
     seed_canonical_benchmark_records,
+    resolve_benchmark_matrix,
+    load_current_benchmark_records,
+    load_historical_benchmark_records,
+    STAGE_SPECS,
+    RESULTS_DIR,
+    CURRENT_RESULTS_DIR,
+    ARCHIVE_RESULTS_DIR,
 )
 
 # Page configuration
@@ -147,6 +154,96 @@ st.markdown("""
         border-radius: 4px;
         font-size: 0.78rem;
         border: 1px solid #F5E6B8;
+        display: inline-block;
+    }
+    .badge-current {
+        background-color: #E8F5E9;
+        color: #1B5E20;
+        font-weight: 700;
+        padding: 2px 7px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        border: 1px solid #A5D6A7;
+        display: inline-block;
+    }
+    .badge-hist {
+        background-color: #ECEFF1;
+        color: #37474F;
+        font-weight: 600;
+        padding: 2px 7px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        border: 1px solid #CFD8DC;
+        display: inline-block;
+    }
+    .badge-pass {
+        background-color: #E8F5E9;
+        color: #2E7D32;
+        font-weight: 700;
+        padding: 2px 7px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        border: 1px solid #81C784;
+        display: inline-block;
+    }
+    .badge-oom {
+        background-color: #FFF3E0;
+        color: #E65100;
+        font-weight: 700;
+        padding: 2px 7px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        border: 1px solid #FFB74D;
+        display: inline-block;
+    }
+    .badge-fail {
+        background-color: #FFEBEE;
+        color: #C62828;
+        font-weight: 700;
+        padding: 2px 7px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        border: 1px solid #EF9A9A;
+        display: inline-block;
+    }
+    .badge-error {
+        background-color: #FBE9E7;
+        color: #D84315;
+        font-weight: 700;
+        padding: 2px 7px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        border: 1px solid #FFAB91;
+        display: inline-block;
+    }
+    .badge-unsupp {
+        background-color: #F5F5F5;
+        color: #616161;
+        font-weight: 600;
+        padding: 2px 7px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        border: 1px solid #E0E0E0;
+        display: inline-block;
+    }
+    .badge-unavail {
+        background-color: #FAFAFA;
+        color: #757575;
+        font-weight: 600;
+        padding: 2px 7px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        border: 1px solid #EEEEEE;
+        display: inline-block;
+    }
+    .badge-noteval {
+        background-color: #F5F5F5;
+        color: #9E9E9E;
+        font-weight: 500;
+        padding: 2px 7px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        border: 1px dashed #BDBDBD;
         display: inline-block;
     }
 
@@ -295,13 +392,41 @@ st.sidebar.markdown("""
 """, unsafe_allow_html=True)
 
 sections = [
-    "1. Scaling & RAM Charts",
-    "2. Executive Summary",
-    "3. Canonical Model Benchmarks",
-    "4. Architecture & Storage Offload",
-    # "5. Verification & Correctness",
+    "1. Staged Benchmark Matrix & Progress",
+    "2. Scaling & RAM Charts",
+    "3. Executive Summary",
+    "4. Canonical Model Benchmarks",
+    "5. Architecture & Storage Offload",
 ]
 selected_section = st.sidebar.radio("Navigate Sections:", sections, index=0)
+
+st.sidebar.markdown("---")
+
+# Provenance and Stage Filters
+st.sidebar.markdown("### Benchmark Filters")
+sidebar_current_only = st.sidebar.checkbox(
+    "Current Benchmark Only",
+    value=False,
+    help="Strictly filter to runs evaluated in the current benchmark execution"
+)
+sidebar_source = st.sidebar.selectbox(
+    "Result Provenance:",
+    options=["ALL", "CURRENT", "HISTORICAL"],
+    index=0,
+    help="Filter by result origin"
+)
+sidebar_status = st.sidebar.selectbox(
+    "Status Filter:",
+    options=["ALL", "PASS", "FAIL", "OOM", "ERROR", "UNSUPPORTED", "UNAVAILABLE", "NOT EVALUATED"],
+    index=0,
+    help="Filter by execution outcome"
+)
+sidebar_stage = st.sidebar.selectbox(
+    "Context Stage:",
+    options=["ALL", "2K", "4K", "8K", "16K", "32K"],
+    index=0,
+    help="Filter by context length stage"
+)
 
 st.sidebar.markdown("---")
 
@@ -312,6 +437,8 @@ if st.sidebar.button("Refresh Benchmark Data"):
 
 st.sidebar.markdown("""
 **Data Evidence Guide:**
+- <span class="badge-current">[CURRENT]</span> Current benchmark run
+- <span class="badge-hist">[HISTORICAL]</span> Preserved archive benchmark
 - <span class="badge-real">[REAL]</span> Physical CPU / host OS memory
 - <span class="badge-virtual">[VIRTUAL-DEVICE]</span> QEMU NVMe `/dev/nvme0n1`
 - <span class="badge-analytical">[ANALYTICAL]</span> Analytical storage/bus math
@@ -319,9 +446,124 @@ st.sidebar.markdown("""
 
 
 # =====================================================================
-# SECTION 1: SCALING & RAM CHARTS (CORE USER REQUIREMENT)
+# SECTION 1: STAGED BENCHMARK MATRIX & PROGRESS
 # =====================================================================
-if selected_section == "1. Scaling & RAM Charts":
+if selected_section == "1. Staged Benchmark Matrix & Progress":
+    st.markdown('<div class="main-title">AI-SSD V2 — Staged Full Model × Precision × Context Benchmark</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-title">Evaluation across context stages: <b>2K (2048) &rarr; 4K (4096) &rarr; 8K (8192) &rarr; 16K (16384) &rarr; 32K (32768)</b></div>', unsafe_allow_html=True)
+
+    # Resolve benchmark matrix with strict precedence: CURRENT > HISTORICAL > NOT EVALUATED
+    resolved = resolve_benchmark_matrix(current_only=sidebar_current_only)
+    records = resolved["records"]
+    stage_progress = resolved["stage_progress"]
+    stats = resolved["stats"]
+
+    # 1. Stage Progress Widget
+    st.markdown("#### Context Stage Progress")
+    cols = st.columns(len(stage_progress))
+    for col, (s_name, s_info) in zip(cols, stage_progress.items()):
+        with col:
+            s_stat = s_info.get("status", "NOT STARTED")
+            badge_class = "badge-pass" if s_stat == "COMPLETE" else ("badge-oom" if s_stat == "IN PROGRESS" else "badge-noteval")
+            pct = s_info["completed"] / max(1, s_info["total"])
+            st.markdown(f"""
+            <div class="beige-card" style="text-align: center; padding: 12px 8px;">
+                <h4 style="margin: 0; color: #C25E34;">{s_name}</h4>
+                <div style="font-size: 0.8rem; color: #6C635B; margin-bottom: 6px;">{s_info['context']:,} Tokens</div>
+                <div style="font-weight: 700; font-size: 1.1rem; color: #2C2621;">{s_info['completed']} / {s_info['total']}</div>
+                <div style="margin-top: 6px;"><span class="{badge_class}">{s_stat}</span></div>
+            </div>
+            """, unsafe_allow_html=True)
+            st.progress(pct)
+
+    # 2. Executive KPI Metrics
+    st.markdown("#### Benchmark Matrix Execution Overview")
+    kpi1, kpi2, kpi3, kpi4, kpi5, kpi6 = st.columns(6)
+    with kpi1:
+        st.metric("Total Cells", stats.get("total_matrix_cells", 0))
+    with kpi2:
+        st.metric("Current Eval", stats.get("current_evaluated", 0))
+    with kpi3:
+        st.metric("Historical Eval", stats.get("historical_evaluated", 0))
+    with kpi4:
+        st.metric("Verified PASS", stats.get("pass", 0))
+    with kpi5:
+        st.metric("OOM / Fail", f"{stats.get('oom', 0)} / {stats.get('fail', 0)}")
+    with kpi6:
+        st.metric("Unsupported", f"{stats.get('unsupported', 0) + stats.get('unavailable', 0)}")
+
+    st.markdown("---")
+
+    # 3. Model × Context Pivot Matrix View
+    st.markdown("#### Model × Context Benchmark Matrix")
+    matrix_rows = []
+    # Group by model + precision
+    model_prec_keys = sorted(list(set((r["model_key"], r["precision_requested"]) for r in records)))
+    for m_key, prec in model_prec_keys:
+        row_dict = {"Model": m_key, "Precision": prec.upper()}
+        for r in records:
+            if r["model_key"] == m_key and r["precision_requested"] == prec:
+                s_name = r["stage_name"]
+                stat = r.get("status", "NOT EVALUATED")
+                src = r.get("result_source", "")
+                src_tag = f" [{src[:4]}]" if src in ("CURRENT", "HISTORICAL") else ""
+                row_dict[s_name] = f"{stat}{src_tag}"
+        matrix_rows.append(row_dict)
+
+    if matrix_rows:
+        matrix_df = pd.DataFrame(matrix_rows)
+        st.dataframe(matrix_df, width="stretch", hide_index=True)
+
+    st.markdown("---")
+
+    # 4. Filtered Configuration Records Table
+    st.markdown("#### Detailed Telemetry Records")
+    filtered_records = []
+    for r in records:
+        if sidebar_source != "ALL" and r.get("result_source") != sidebar_source:
+            continue
+        if sidebar_status != "ALL" and r.get("status") != sidebar_status:
+            continue
+        if sidebar_stage != "ALL" and r.get("stage_name") != sidebar_stage:
+            continue
+        filtered_records.append(r)
+
+    table_data = []
+    for r in filtered_records:
+        src = r.get("result_source", "NOT EVALUATED")
+        src_disp = f"[{src}]"
+        stat = r.get("status", "NOT EVALUATED")
+        b_rss = r.get("baseline_peak_rss_mb", 0.0)
+        a_rss = r.get("aissd_peak_rss_mb", 0.0)
+        saved = r.get("memory_saved_mb", 0.0)
+        tps = r.get("aissd_tps", 0.0)
+        parity = "16/16 (100%)" if r.get("exact_token_match") else (f"{r.get('token_match_rate', 0.0):.1f}%" if r.get("exact_token_match") is not None else "-")
+
+        table_data.append({
+            "Stage": r.get("stage_name", ""),
+            "Model": r.get("model_key", ""),
+            "Precision": r.get("precision_requested", "").upper(),
+            "Status": stat,
+            "Source": src_disp,
+            "Base RSS (MB)": f"{b_rss:,.1f}" if b_rss > 0 else "-",
+            "AI-SSD RSS (MB)": f"{a_rss:,.1f}" if a_rss > 0 else "-",
+            "RAM Saved (MB)": f"{saved:,.1f}" if saved > 0 else "-",
+            "Decode TPS": f"{tps:.2f}" if tps > 0 else "-",
+            "Token Parity": parity,
+            "Notes / Reason": r.get("status_reason", "")[:50],
+        })
+
+    if table_data:
+        det_df = pd.DataFrame(table_data)
+        st.dataframe(det_df, width="stretch", hide_index=True)
+    else:
+        st.info("No records matching the selected filters.")
+
+
+# =====================================================================
+# SECTION 2: SCALING & RAM CHARTS (CORE USER REQUIREMENT)
+# =====================================================================
+elif selected_section == "2. Scaling & RAM Charts":
     st.markdown('<div class="main-title">Context Scaling: RAM Consumption vs Context Length</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-title">Empirical memory telemetry extracted directly from the <code>benchmarks/</code> directory</div>', unsafe_allow_html=True)
 
