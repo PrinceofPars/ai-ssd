@@ -661,6 +661,8 @@ def run_staged_benchmark(
 
                     b_rss = rec.get("baseline_peak_rss_mb", 0.0)
                     a_rss = rec.get("aissd_peak_rss_mb", 0.0)
+                    saved = rec.get("memory_saved_mb", 0.0)
+                    tps = rec.get("aissd_tps", 0.0)
                     match_rate_disp = f"{rec.get('token_match_rate', 0.0):.1f}%"
                     print(f"[{status_final}] {cell_tag}: {matches}/{tot} tokens ({match_rate_disp}) | Peak RSS: Base {b_rss:.1f} MB -> AI-SSD {a_rss:.1f} MB ({saved:.1f} MB saved) | {tps:.2f} tok/s")
 
