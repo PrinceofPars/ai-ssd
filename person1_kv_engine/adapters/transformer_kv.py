@@ -210,6 +210,22 @@ class TransformerKVStateProvider(StateProvider):
         ld["recent_v"] = torch.cat([ld["recent_v"], v_tok], dim=2)
         ld["total_tokens"] += 1
 
+        # Incremental block offloading during long generation:
+        # If recent buffer accumulates a full historical block beyond recent_tokens,
+        # offload the oldest tokens_per_block tokens into a new storage block.
+        if ld["recent_k"].shape[2] >= (self.recent_tokens + self.tokens_per_block):
+            k_chunk = ld["recent_k"][:, :, :self.tokens_per_block, :]
+            v_chunk = ld["recent_v"][:, :, :self.tokens_per_block, :]
+            ld["recent_k"] = ld["recent_k"][:, :, self.tokens_per_block:, :].contiguous()
+            ld["recent_v"] = ld["recent_v"][:, :, self.tokens_per_block:, :].contiguous()
+
+            np_dtype = np.float16 if self.bytes_per_elem == 2 else np.float32
+            k_blk_np = np.ascontiguousarray(k_chunk[0].detach().cpu().numpy().transpose(1, 0, 2).astype(np_dtype, copy=False))
+            v_blk_np = np.ascontiguousarray(v_chunk[0].detach().cpu().numpy().transpose(1, 0, 2).astype(np_dtype, copy=False))
+            bid = len(ld["candidate_blocks"])
+            self.backend.write_block(layer_idx, bid, k_blk_np, v_blk_np)
+            ld["candidate_blocks"].append((bid, self.tokens_per_block))
+
     def select_and_fetch_active_state(
         self,
         layer_idx: int,
@@ -386,7 +402,8 @@ class TransformerKVStateProvider(StateProvider):
         cand_bids = ld["candidate_blocks"]
         k_val = max(1, int(math.ceil(len(cand_bids) * (self.top_k_pct / 100.0)))) if cand_bids else 0
 
-        active_tokens = self.sink_tokens + self.recent_tokens + (k_val * self.tokens_per_block)
+        recent_count = ld["recent_k"].shape[2] if ld["recent_k"] is not None else self.recent_tokens
+        active_tokens = self.sink_tokens + recent_count + (k_val * self.tokens_per_block)
         bytes_per_elem = getattr(self, "bytes_per_elem", 4)
         num_attn_layers = len(self.layer_data)
         bytes_per_tok_all_layers = self.num_kv_heads * self.head_dim * bytes_per_elem * 2 * num_attn_layers
