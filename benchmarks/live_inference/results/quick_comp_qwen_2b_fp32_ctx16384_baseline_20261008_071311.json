@@ -1,0 +1,75 @@
+{
+  "schema_version": "2.0",
+  "timestamp_utc": "2026-10-08T07:13:11Z",
+  "source": "scripts/run_quick_comparison.py",
+  "model": {
+    "name": "Qwen",
+    "full_name": "Qwen-2B",
+    "model_id": "Qwen/Qwen3-2B",
+    "weight": "2B",
+    "precision": "fp32",
+    "precision_display": "FP32"
+  },
+  "benchmark": {
+    "mode": "BASELINE",
+    "context_length": 16384,
+    "decode_tokens": 16,
+    "threads": 4,
+    "storage_mode": "none",
+    "computational_storage": false
+  },
+  "metrics": {
+    "ram_consumption": {
+      "peak_rss_mb": 7559.63,
+      "avg_rss_mb": 7175.67,
+      "min_rss_mb": 6974.88,
+      "model_load_peak_rss_mb": 7496.43,
+      "prefill_peak_rss_mb": 7502.08,
+      "post_prefill_rss_mb": 7317.99,
+      "decode_peak_rss_mb": 7559.63,
+      "overall_peak_rss_mb": 7559.63,
+      "vm_peak_mb": 19257.41,
+      "final_rss_mb": 6969.99
+    },
+    "kv_cache": {
+      "active_kv_mb": 1531.59,
+      "cold_kv_mb": 0.0,
+      "total_kv_mb": 1531.59
+    },
+    "performance": {
+      "wall_time_s": 968.522,
+      "prefill_time_s": 479.722,
+      "decode_time_s": 968.522,
+      "tokens_per_second": 0.017,
+      "latency_ms_per_token": 60532.6
+    },
+    "storage_bus": {
+      "candidate_k_bytes_to_host": 0,
+      "winning_kv_bytes_to_host": 0,
+      "storage_read_bytes": 0,
+      "visible_storage_s": 0.0
+    },
+    "verification": {
+      "exact_token_match": true,
+      "token_ids": [
+        16,
+        13,
+        220,
+        16,
+        13,
+        220,
+        16,
+        13,
+        220,
+        16,
+        13,
+        220,
+        16,
+        13,
+        220,
+        16
+      ],
+      "generated_text": "1. 1. 1. 1. 1. 1"
+    }
+  }
+}

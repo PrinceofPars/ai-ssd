@@ -1,0 +1,75 @@
+{
+  "schema_version": "2.0",
+  "timestamp_utc": "2026-10-08T06:37:29Z",
+  "source": "scripts/run_quick_comparison.py",
+  "model": {
+    "name": "Qwen",
+    "full_name": "Qwen-2B",
+    "model_id": "Qwen/Qwen3-2B",
+    "weight": "2B",
+    "precision": "fp32",
+    "precision_display": "FP32"
+  },
+  "benchmark": {
+    "mode": "BASELINE",
+    "context_length": 8192,
+    "decode_tokens": 16,
+    "threads": 4,
+    "storage_mode": "none",
+    "computational_storage": false
+  },
+  "metrics": {
+    "ram_consumption": {
+      "peak_rss_mb": 7559.42,
+      "avg_rss_mb": 7474.15,
+      "min_rss_mb": 7416.24,
+      "model_load_peak_rss_mb": 7456.29,
+      "prefill_peak_rss_mb": 7559.42,
+      "post_prefill_rss_mb": 7453.21,
+      "decode_peak_rss_mb": 7528.24,
+      "overall_peak_rss_mb": 7559.42,
+      "vm_peak_mb": 17927.41,
+      "final_rss_mb": 7425.88
+    },
+    "kv_cache": {
+      "active_kv_mb": 769.5,
+      "cold_kv_mb": 0.0,
+      "total_kv_mb": 769.5
+    },
+    "performance": {
+      "wall_time_s": 28.573,
+      "prefill_time_s": 205.347,
+      "decode_time_s": 28.573,
+      "tokens_per_second": 0.56,
+      "latency_ms_per_token": 1785.8
+    },
+    "storage_bus": {
+      "candidate_k_bytes_to_host": 0,
+      "winning_kv_bytes_to_host": 0,
+      "storage_read_bytes": 0,
+      "visible_storage_s": 0.0
+    },
+    "verification": {
+      "exact_token_match": true,
+      "token_ids": [
+        6235,
+        1528,
+        6338,
+        6259,
+        888,
+        279,
+        87567,
+        23683,
+        7575,
+        5647,
+        13,
+        561,
+        6259,
+        22151,
+        8427,
+        4821
+      ],
+      "generated_text": " solid state drive controller over the PCIe NVMe bus. The controller embedded processing unit"
+    }
+  }
+}
