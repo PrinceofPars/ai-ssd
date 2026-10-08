@@ -252,7 +252,7 @@ def make_comparison_record(
     seed: int,
     b_data: Optional[Dict[str, Any]] = None,
     a_data: Optional[Dict[str, Any]] = None,
-    storage_mode: str = "file",
+    storage_mode: str = "nvme_qemu",
     git_commit: str = "unknown",
     generation_id: str = "",
 ) -> Dict[str, Any]:
@@ -734,7 +734,7 @@ def main():
     parser.add_argument("--decode", type=int, default=16, help="Tokens to generate during decode (default: 16)")
     parser.add_argument("--threads", type=int, default=4, help="CPU threads (default: 4)")
     parser.add_argument("--precision", type=str, default="fp32", help="Model precision: fp32 (default), fp16")
-    parser.add_argument("--storage-mode", type=str, default="file", choices=["file", "nvme_qemu"], help="Storage backend mode (default: file)")
+    parser.add_argument("--storage-mode", type=str, default="nvme_qemu", choices=["file", "nvme_qemu"], help="Storage backend mode (default: nvme_qemu)")
 
     args = parser.parse_args()
 
