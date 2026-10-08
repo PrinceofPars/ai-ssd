@@ -155,6 +155,7 @@ def run_worker():
             "final_rss_mb": mem_final["vm_rss_mb"],
             "active_kv_mb": res["kv_memory_mb"],
             "cold_kv_mb": 0.0,
+            "storage_mode": "none",
             "storage_bytes": 0,
             "storage_read_bytes": 0,
             "storage_write_bytes": 0,

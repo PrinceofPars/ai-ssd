@@ -563,7 +563,7 @@ def run_staged_benchmark(
                         prompt_tokens=prompt_target,
                         decode=decode_tokens,
                         threads=threads,
-                        storage_mode=storage_mode,
+                        storage_mode="none",
                         output_file=b_file,
                         precision=prec,
                     )
@@ -826,7 +826,7 @@ def main():
                 prompt_tokens=args.context,
                 decode=args.decode,
                 threads=args.threads,
-                storage_mode=args.storage_mode,
+                storage_mode="none",
                 output_file=base_out,
                 precision=args.precision,
             )
