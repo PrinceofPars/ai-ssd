@@ -1,0 +1,212 @@
+{
+  "meta": {
+    "model": "Qwen/Qwen2.5-0.5B",
+    "context": 512,
+    "decode": 16,
+    "threads": 4,
+    "reps": 5,
+    "dtype": "float32",
+    "storage_mode": "file",
+    "out": "/home/ubuntu/ai-ssd/results/5rep_ctx512_summary.json"
+  },
+  "baseline": {
+    "runs_count": 5,
+    "model_load_peak_rss_mb": {
+      "mean": 2330.3599999999997,
+      "std": 0.010954451150010334,
+      "min": 2330.34,
+      "max": 2330.37
+    },
+    "prefill_peak_rss_mb": {
+      "mean": 2412.74,
+      "std": 20.164674061338097,
+      "min": 2394.31,
+      "max": 2447.61
+    },
+    "post_prefill_rss_mb": {
+      "mean": 2349.954,
+      "std": 0.36307574967210693,
+      "min": 2349.3,
+      "max": 2350.38
+    },
+    "decode_peak_rss_mb": {
+      "mean": 2367.838,
+      "std": 4.941163425753113,
+      "min": 2363.98,
+      "max": 2377.34
+    },
+    "overall_peak_rss_mb": {
+      "mean": 2412.74,
+      "std": 20.164674061338097,
+      "min": 2394.31,
+      "max": 2447.61
+    },
+    "prefill_time_s": {
+      "mean": 1.4308,
+      "std": 0.031102411482070012,
+      "min": 1.373,
+      "max": 1.46
+    },
+    "decode_time_s": {
+      "mean": 1.3126000000000002,
+      "std": 0.0033226495451672434,
+      "min": 1.308,
+      "max": 1.318
+    },
+    "wall_time_s": {
+      "mean": 1.3125267364004685,
+      "std": 0.0031571610551975474,
+      "min": 1.3077636519992666,
+      "max": 1.3175170770009572
+    },
+    "tokens_per_second": {
+      "mean": 12.1902983841527,
+      "std": 0.029315654370112375,
+      "min": 12.144055116477535,
+      "max": 12.234626628091185
+    },
+    "active_kv_mb": {
+      "mean": 12.375,
+      "std": 0.0,
+      "min": 12.375,
+      "max": 12.375
+    },
+    "candidate_k_bytes_to_host": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "total_read_mb": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "total_write_mb": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "token_ids": [
+      6437,
+      1584,
+      6541,
+      6461,
+      916,
+      279,
+      90690,
+      24458,
+      7823,
+      5828,
+      13,
+      576,
+      6461,
+      22864,
+      8692,
+      4982
+    ],
+    "generated_text": " solid state drive controller over the PCIe NVMe bus. The controller embedded processing unit"
+  },
+  "aissd": {
+    "runs_count": 5,
+    "model_load_peak_rss_mb": {
+      "mean": 2330.3480000000004,
+      "std": 0.0074833147735167685,
+      "min": 2330.34,
+      "max": 2330.36
+    },
+    "prefill_peak_rss_mb": {
+      "mean": 2392.7419999999997,
+      "std": 6.274326736790195,
+      "min": 2384.55,
+      "max": 2402.07
+    },
+    "post_prefill_rss_mb": {
+      "mean": 2333.882,
+      "std": 0.41077487751811403,
+      "min": 2333.51,
+      "max": 2334.46
+    },
+    "decode_peak_rss_mb": {
+      "mean": 2353.558,
+      "std": 0.8300939705840324,
+      "min": 2352.19,
+      "max": 2354.67
+    },
+    "overall_peak_rss_mb": {
+      "mean": 2392.7419999999997,
+      "std": 6.274326736790195,
+      "min": 2384.55,
+      "max": 2402.07
+    },
+    "prefill_time_s": {
+      "mean": 1.5348000000000002,
+      "std": 0.018925115587493754,
+      "min": 1.508,
+      "max": 1.553
+    },
+    "decode_time_s": {
+      "mean": 1.4966000000000002,
+      "std": 0.00801498596380549,
+      "min": 1.488,
+      "max": 1.509
+    },
+    "wall_time_s": {
+      "mean": 1.496742183400056,
+      "std": 0.007888655627559674,
+      "min": 1.4882454920007149,
+      "max": 1.5086647030002496
+    },
+    "tokens_per_second": {
+      "mean": 10.69018004480089,
+      "std": 0.05621020664560036,
+      "min": 10.605404877691603,
+      "max": 10.75091447345188
+    },
+    "active_kv_mb": {
+      "mean": 1.96875,
+      "std": 0.0,
+      "min": 1.96875,
+      "max": 1.96875
+    },
+    "candidate_k_bytes_to_host": {
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "total_read_mb": {
+      "mean": 101.25,
+      "std": 0.0,
+      "min": 101.25,
+      "max": 101.25
+    },
+    "total_write_mb": {
+      "mean": 11.625,
+      "std": 0.0,
+      "min": 11.625,
+      "max": 11.625
+    },
+    "token_ids": [
+      6437,
+      1584,
+      6541,
+      6461,
+      916,
+      279,
+      90690,
+      24458,
+      7823,
+      5828,
+      13,
+      576,
+      6461,
+      22864,
+      8692,
+      4982
+    ],
+    "generated_text": " solid state drive controller over the PCIe NVMe bus. The controller embedded processing unit"
+  }
+}
