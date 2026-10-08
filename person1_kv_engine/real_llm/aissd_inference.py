@@ -22,6 +22,8 @@ import gc
 import logging
 import psutil
 import threading
+import inspect
+import ctypes
 def _get_storage_byte_counters(b: Any) -> Tuple[int, int]:
     s = getattr(b, "storage_backend", b)
     nvme = getattr(s, "_nvme_client", None)
@@ -451,14 +453,37 @@ def run_baseline_decode(
     """
     torch.manual_seed(seed)
     gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
     rss_before = get_current_rss_mb()
 
     # Pre-cache non-English tokens to guarantee strictly English generation
     non_eng_mask = get_non_english_token_ids(tokenizer, input_ids.device) if enforce_english else None
 
-    # 1. Prefill step (excluded from decode timer)
-    with torch.no_grad():
-        prefill_out = model(input_ids=input_ids, use_cache=True)
+    # Check for logits_to_keep support
+    supports_logits_to_keep = False
+    try:
+        sig = inspect.signature(model.forward)
+        supports_logits_to_keep = "logits_to_keep" in sig.parameters
+    except Exception:
+        pass
+
+    # 1. Prefill step (profiled for memory telemetry)
+    prefill_sampler = ProcessMemorySampler(sample_interval_s=0.005)
+    prefill_sampler.start()
+    t_prefill_start = time.perf_counter()
+
+    prefill_kwargs = {"input_ids": input_ids, "use_cache": True}
+    if supports_logits_to_keep:
+        prefill_kwargs["logits_to_keep"] = 1
+
+    with torch.inference_mode():
+        prefill_out = model(**prefill_kwargs)
+    t_prefill_end = time.perf_counter()
+    prefill_mem = prefill_sampler.stop()
+    prefill_time = t_prefill_end - t_prefill_start
     pkv = prefill_out.past_key_values
 
     prefill_last_logits = prefill_out.logits[:, -1, :]
@@ -468,6 +493,15 @@ def run_baseline_decode(
     next_token = torch.argmax(prefill_last_logits, dim=-1, keepdim=True)
     generated_tokens = [next_token.item()]
     step_logits = [prefill_last_logits.clone()]
+
+    # Release prefill activations and trigger malloc_trim
+    del prefill_out
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+    post_prefill_rss = get_current_rss_mb()
 
     # 2. Generation execution interval (measured strictly with high-res RSS sampler)
     pbar = None
@@ -485,7 +519,7 @@ def run_baseline_decode(
     sampler.start()
     t_start = time.perf_counter()
     for step in range(1, decode_tokens):
-        with torch.no_grad():
+        with torch.inference_mode():
             step_out = model(input_ids=next_token, past_key_values=pkv, use_cache=True)
         pkv = step_out.past_key_values
 
@@ -516,6 +550,8 @@ def run_baseline_decode(
     total_kv_mb = total_kv_bytes / (1024.0 * 1024.0)
 
     generated_text = tokenizer.decode(generated_tokens)
+    decode_peak_rss = proc_mem["peak_rss_mb"]
+    overall_peak_rss = max(prefill_mem["peak_rss_mb"], decode_peak_rss)
 
     return {
         "mode": "BASELINE",
@@ -524,10 +560,17 @@ def run_baseline_decode(
         "tokens_per_second": tps,
         "min_rss_mb": proc_mem["min_rss_mb"],
         "avg_rss_mb": proc_mem["avg_rss_mb"],
-        "peak_rss_mb": proc_mem["peak_rss_mb"],
+        "peak_rss_mb": overall_peak_rss,
         "std_rss_mb": proc_mem["std_rss_mb"],
         "rss_sample_count": proc_mem["sample_count"],
-        "rss_increment_mb": proc_mem["peak_rss_mb"] - rss_before,
+        "rss_increment_mb": overall_peak_rss - rss_before,
+        "prefill_peak_rss_mb": prefill_mem["peak_rss_mb"],
+        "post_prefill_rss_mb": post_prefill_rss,
+        "decode_peak_rss_mb": decode_peak_rss,
+        "overall_peak_rss_mb": overall_peak_rss,
+        "prefill_time_s": prefill_time,
+        "decode_time_s": wall_time,
+        "total_wall_time_s": prefill_time + wall_time,
         "kv_memory_mb": total_kv_mb,
         "kv_offloaded_pct": 0.0,
         "kv_blocks_read": 0,
@@ -571,6 +614,10 @@ def run_aissd_decode(
     """
     torch.manual_seed(seed)
     gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
     rss_before = get_current_rss_mb()
 
     # If no model_adapter is passed, resolve or build a default config
@@ -700,11 +747,31 @@ def run_aissd_decode(
     total_model_forward_s = 0.0
     pre_read_0, pre_write_0 = _get_storage_byte_counters(backend)
     try:
-        # 1. Prefill step
-        with torch.no_grad():
-            prefill_out = model(input_ids=input_ids, use_cache=True)
+        # Check for logits_to_keep support
+        supports_logits_to_keep = False
+        try:
+            sig = inspect.signature(model.forward)
+            supports_logits_to_keep = "logits_to_keep" in sig.parameters
+        except Exception:
+            pass
+
+        # 1. Prefill step (profiled for memory telemetry)
+        prefill_sampler = ProcessMemorySampler(sample_interval_s=0.005)
+        prefill_sampler.start()
+        t_prefill_start = time.perf_counter()
+
+        prefill_kwargs = {"input_ids": input_ids, "use_cache": True}
+        if supports_logits_to_keep:
+            prefill_kwargs["logits_to_keep"] = 1
+
+        with torch.inference_mode():
+            prefill_out = model(**prefill_kwargs)
         pkv_prefill = prefill_out.past_key_values
         kv_mgr.init_from_prefill(pkv_prefill)
+
+        t_prefill_end = time.perf_counter()
+        prefill_mem = prefill_sampler.stop()
+        prefill_time = t_prefill_end - t_prefill_start
 
         pre_read_1, pre_write_1 = _get_storage_byte_counters(backend)
         prefill_write_bytes = max(0, pre_write_1 - pre_write_0)
@@ -732,6 +799,11 @@ def run_aissd_decode(
         del prefill_out
         del pkv_prefill
         gc.collect()
+        try:
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except Exception:
+            pass
+        post_prefill_rss = get_current_rss_mb()
 
         # 2. Generation execution interval (measured strictly with high-res RSS sampler)
         pbar = None
@@ -754,7 +826,7 @@ def run_aissd_decode(
             model_timings["bookkeeping_s"] += time.perf_counter() - t_bk
 
             t_step = time.perf_counter()
-            with torch.no_grad():
+            with torch.inference_mode():
                 step_pkv = getattr(kv_mgr, "native_cache", None)
                 if step_pkv is not None:
                     step_out = model(input_ids=next_token, position_ids=pos_ids, past_key_values=step_pkv, use_cache=True)
@@ -853,6 +925,9 @@ def run_aissd_decode(
     dec_read_mb = dec_read / (1024.0 * 1024.0)
     dec_write_mb = dec_write / (1024.0 * 1024.0)
 
+    decode_peak_rss = proc_mem["peak_rss_mb"]
+    overall_peak_rss = max(prefill_mem["peak_rss_mb"], decode_peak_rss)
+
     result = {
         "mode": "AI-SSD",
         "wall_time_s": wall_time,
@@ -860,10 +935,17 @@ def run_aissd_decode(
         "tokens_per_second": tps,
         "min_rss_mb": proc_mem["min_rss_mb"],
         "avg_rss_mb": proc_mem["avg_rss_mb"],
-        "peak_rss_mb": proc_mem["peak_rss_mb"],
+        "peak_rss_mb": overall_peak_rss,
         "std_rss_mb": proc_mem["std_rss_mb"],
         "rss_sample_count": proc_mem["sample_count"],
-        "rss_increment_mb": proc_mem["peak_rss_mb"] - rss_before,
+        "rss_increment_mb": overall_peak_rss - rss_before,
+        "prefill_peak_rss_mb": prefill_mem["peak_rss_mb"],
+        "post_prefill_rss_mb": post_prefill_rss,
+        "decode_peak_rss_mb": decode_peak_rss,
+        "overall_peak_rss_mb": overall_peak_rss,
+        "prefill_time_s": prefill_time,
+        "decode_time_s": wall_time,
+        "total_wall_time_s": prefill_time + wall_time,
         "kv_memory_mb": mem_stats["active_dram_mb"],
         "kv_offloaded_pct": mem_stats["offload_pct"],
         "kv_blocks_read": getattr(backend, "blocks_read", 0),

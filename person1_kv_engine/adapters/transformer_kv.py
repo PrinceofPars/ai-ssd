@@ -180,10 +180,14 @@ class TransformerKVStateProvider(StateProvider):
                     for b_start in range(0, total_hist_tok, self.tokens_per_block):
                         b_end = min(b_start + self.tokens_per_block, total_hist_tok)
                         tok_count = b_end - b_start
-                        k_blk = np.zeros((self.tokens_per_block, self.num_kv_heads, self.head_dim), dtype=np_dtype)
-                        v_blk = np.zeros((self.tokens_per_block, self.num_kv_heads, self.head_dim), dtype=np_dtype)
-                        k_blk[:tok_count] = k_t[b_start:b_end]
-                        v_blk[:tok_count] = v_t[b_start:b_end]
+                        if tok_count == self.tokens_per_block:
+                            k_blk = np.ascontiguousarray(k_t[b_start:b_end])
+                            v_blk = np.ascontiguousarray(v_t[b_start:b_end])
+                        else:
+                            k_blk = np.zeros((self.tokens_per_block, self.num_kv_heads, self.head_dim), dtype=np_dtype)
+                            v_blk = np.zeros((self.tokens_per_block, self.num_kv_heads, self.head_dim), dtype=np_dtype)
+                            k_blk[:tok_count] = k_t[b_start:b_end]
+                            v_blk[:tok_count] = v_t[b_start:b_end]
                         self.backend.write_block(l_idx, bid, k_blk, v_blk)
                         cand_bids.append((bid, tok_count))
                         bid += 1
@@ -196,6 +200,7 @@ class TransformerKVStateProvider(StateProvider):
                 "candidate_blocks": cand_bids,
                 "total_tokens": seq_len,
             }
+            layers_dict[l_idx] = None
         self.is_active = True
 
     def append_new_token(self, layer_idx: int, *state_tensors: Any) -> None:

@@ -255,6 +255,11 @@ def main():
         active_kv_mb = data.get("active_kv_mb", 0.0)
         token_ids = data.get("token_ids", [])
         generated_text = data.get("generated_text", "")
+        prefill_time_s = data.get("prefill_time_s")
+        decode_time_s = data.get("decode_time_s")
+        prefill_rss = data.get("prefill_peak_rss_mb")
+        post_prefill_rss = data.get("post_prefill_rss_mb")
+        decode_rss = data.get("decode_peak_rss_mb")
 
         print("\n==================================================")
         print("      CONVENTIONAL DENSE BENCHMARK RESULTS")
@@ -267,10 +272,19 @@ def main():
         print(f"Language:               ENGLISH (Verified) [DENSE]")
         print("--------------------------------------------------")
         print(f"Wall Time:              {wall_time_s:.3f} s [DENSE]")
+        if prefill_time_s is not None and decode_time_s is not None:
+            print(f"Prefill Time:           {prefill_time_s:.3f} s [DENSE]")
+            print(f"Decode Time:            {decode_time_s:.3f} s [DENSE]")
         print(f"Throughput:             {tok_s:.3f} tok/s [DENSE]")
         print(f"Latency / Token:        {lat_ms:.1f} ms/token [DENSE]")
         print("--------------------------------------------------")
-        print(f"Dense Peak RSS:         {dense_rss_mb:,.1f} MB [DENSE]")
+        print(f"Overall Peak RSS:       {dense_rss_mb:,.1f} MB [DENSE]")
+        if prefill_rss is not None:
+            print(f"Prefill Peak RSS:       {prefill_rss:,.1f} MB [DENSE]")
+        if post_prefill_rss is not None:
+            print(f"Post-Prefill RSS:       {post_prefill_rss:,.1f} MB [DENSE]")
+        if decode_rss is not None:
+            print(f"Decode Peak RSS:        {decode_rss:,.1f} MB [DENSE]")
         print(f"KV Cache in DRAM:       {active_kv_mb:.2f} MB (100% Unpruned) [DENSE]")
         print(f"KV Offload to Storage:  0.0% (DISABLED) [DENSE]")
         print(f"Candidate K -> Host:    N/A (No In-Storage Filtering) [DENSE]")
@@ -388,6 +402,11 @@ def main():
 
     token_ids = data.get("token_ids", [])
     generated_text = data.get("generated_text", "")
+    prefill_time_s = data.get("prefill_time_s")
+    decode_time_s = data.get("decode_time_s")
+    prefill_rss = data.get("prefill_peak_rss_mb")
+    post_prefill_rss = data.get("post_prefill_rss_mb")
+    decode_rss = data.get("decode_peak_rss_mb")
 
     # Token correctness check
     expected_tokens = cfg.expected_tokens_seed42
@@ -420,11 +439,20 @@ def main():
     print(f"Language:               ENGLISH (Verified) [REAL]")
     print("--------------------------------------------------")
     print(f"Wall Time:              {wall_time_s:.3f} s [REAL]")
+    if prefill_time_s is not None and decode_time_s is not None:
+        print(f"Prefill Time:           {prefill_time_s:.3f} s [REAL]")
+        print(f"Decode Time:            {decode_time_s:.3f} s [REAL]")
     print(f"Throughput:             {tok_s:.3f} tok/s [REAL]")
     print(f"Latency / Token:        {lat_ms:.1f} ms/token [REAL]")
     print("--------------------------------------------------")
     print(f"Dense / Reference RSS:  {dense_str} [REAL]")
-    print(f"AI-SSD Peak RSS:        {aissd_rss_mb:,.1f} MB [REAL]")
+    print(f"Overall Peak RSS:       {aissd_rss_mb:,.1f} MB [REAL]")
+    if prefill_rss is not None:
+        print(f"Prefill Peak RSS:       {prefill_rss:,.1f} MB [REAL]")
+    if post_prefill_rss is not None:
+        print(f"Post-Prefill RSS:       {post_prefill_rss:,.1f} MB [REAL]")
+    if decode_rss is not None:
+        print(f"Decode Peak RSS:        {decode_rss:,.1f} MB [REAL]")
     print(f"Memory Reduction:       {mem_red_str} [REAL]")
     print("--------------------------------------------------")
     print(f"Active KV (Host DRAM):  {active_kv_mb:.2f} MB [REAL]")

@@ -7,6 +7,7 @@ and Query vectors for hardware-accurate KV cache simulation and trace generation
 
 from typing import List, Dict, Any, Optional, Tuple
 import os
+import sys
 import time
 import numpy as np
 
@@ -63,6 +64,22 @@ class RealLLMEngine:
             torch_dtype = torch.bfloat16
         else:
             torch_dtype = torch.float16
+
+        # Configure tqdm progress hook for clean, in-place rendering on interactive terminals
+        try:
+            import transformers.utils.logging as hf_logging
+            def _clean_pbar_hook(factory, args, kwargs):
+                kwargs["file"] = sys.stdout
+                kwargs["dynamic_ncols"] = True
+                kwargs["leave"] = True
+                if "mininterval" not in kwargs:
+                    kwargs["mininterval"] = 0.1
+                return factory(*args, **kwargs)
+            hf_logging.set_tqdm_hook(_clean_pbar_hook)
+        except Exception:
+            pass
+
+        sys.stdout.flush()
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_name,
             dtype=torch_dtype,
@@ -70,6 +87,7 @@ class RealLLMEngine:
             attn_implementation="sdpa",
             low_cpu_mem_usage=True,
         )
+        sys.stdout.flush()
         self.model.eval()
 
         cfg = self.model.config

@@ -79,15 +79,52 @@ def print_comparison(baseline_json: str, aissd_json: str, model_name: str):
     with open(aissd_json, "r") as f:
         a = json.load(f)
 
+    b_load_rss = b.get("model_load_peak_rss_mb", 0.0)
+    a_load_rss = a.get("model_load_peak_rss_mb", 0.0)
+    b_prefill_rss = b.get("prefill_peak_rss_mb", b.get("peak_rss_mb", 0.0))
+    a_prefill_rss = a.get("prefill_peak_rss_mb", a.get("peak_rss_mb", 0.0))
+    b_post_rss = b.get("post_prefill_rss_mb", b.get("min_rss_mb", 0.0))
+    a_post_rss = a.get("post_prefill_rss_mb", a.get("min_rss_mb", 0.0))
+    b_dec_rss = b.get("decode_peak_rss_mb", b.get("peak_rss_mb", 0.0))
+    a_dec_rss = a.get("decode_peak_rss_mb", a.get("peak_rss_mb", 0.0))
+    b_peak_rss = b.get("overall_peak_rss_mb", b.get("peak_rss_mb", 0.0))
+    a_peak_rss = a.get("overall_peak_rss_mb", a.get("peak_rss_mb", 0.0))
+
+    b_act_kv = b.get("active_kv_mb", 0.0)
+    a_act_kv = a.get("active_kv_mb", 0.0)
+    b_cold_kv = b.get("cold_kv_mb", 0.0)
+    a_cold_kv = a.get("cold_kv_mb", 0.0)
+    kv_red = ((b_act_kv - a_act_kv) / max(1e-6, b_act_kv)) * 100.0 if b_act_kv > 0 else 0.0
+
     print("\n" + "=" * 80)
     print(f"             AI-SSD vs BASELINE BENCHMARK COMPARISON ({model_name})           ")
     print("=" * 80)
     print(f"{'Metric':<32} | {'Baseline (Without AI-SSD)':<20} | {'AI-SSD (With Offload)'}")
     print("-" * 80)
-    print(f"{'Peak Process RAM (RSS)':<32} | {b.get('peak_rss_mb', 0):>17.1f} MB | {a.get('peak_rss_mb', 0):>16.1f} MB")
-    print(f"{'Active KV in Host RAM':<32} | {b.get('active_kv_mb', 0):>17.2f} MB | {a.get('active_kv_mb', 0):>16.2f} MB")
-    print(f"{'Cold KV on Disk':<32} | {b.get('cold_kv_mb', 0):>17.2f} MB | {a.get('cold_kv_mb', 0):>16.2f} MB")
-    
+    print(f"--- Process Memory Telemetry ---")
+    if b_load_rss > 0 or a_load_rss > 0:
+        print(f"{'Model Load Peak RSS':<32} | {b_load_rss:>17.1f} MB | {a_load_rss:>16.1f} MB")
+    print(f"{'Prefill Peak RSS':<32} | {b_prefill_rss:>17.1f} MB | {a_prefill_rss:>16.1f} MB")
+    print(f"{'Post-Prefill RSS':<32} | {b_post_rss:>17.1f} MB | {a_post_rss:>16.1f} MB")
+    print(f"{'Decode Peak RSS':<32} | {b_dec_rss:>17.1f} MB | {a_dec_rss:>16.1f} MB")
+    print(f"{'Overall Peak RSS':<32} | {b_peak_rss:>17.1f} MB | {a_peak_rss:>16.1f} MB")
+    print("-" * 80)
+    print(f"--- KV Cache Telemetry ---")
+    print(f"{'Active KV in Host RAM':<32} | {b_act_kv:>17.2f} MB | {a_act_kv:>16.2f} MB")
+    print(f"{'Cold KV on Disk':<32} | {b_cold_kv:>17.2f} MB | {a_cold_kv:>16.2f} MB")
+    print(f"{'KV RAM Reduction':<32} | {'0.0%':>20} | {kv_red:>19.1f}%")
+    print("-" * 80)
+    print(f"--- Performance & Throughput ---")
+    b_prefill_s = b.get("prefill_time_s", 0.0)
+    a_prefill_s = a.get("prefill_time_s", 0.0)
+    if b_prefill_s > 0 or a_prefill_s > 0:
+        print(f"{'Prefill Wall Time':<32} | {b_prefill_s:>17.3f} s  | {a_prefill_s:>16.3f} s")
+    print(f"{'Decode Wall Time':<32} | {b.get('wall_time_s', 0):>17.3f} s  | {a.get('wall_time_s', 0):>16.3f} s")
+    b_tps = b.get("tokens_per_second", 0)
+    a_tps = a.get("tokens_per_second", 0)
+    print(f"{'Decode Throughput':<32} | {b_tps:>15.2f} tok/s | {a_tps:>14.2f} tok/s")
+    print("-" * 80)
+    print(f"--- Storage & Hardware Bus ---")
     b_read_mb = b.get("total_read_mb", 0.0)
     a_read_mb = a.get("total_read_mb", round(a.get("storage_read_bytes", 0) / (1024.0 * 1024.0), 2))
     b_write_mb = b.get("total_write_mb", 0.0)
@@ -99,11 +136,6 @@ def print_comparison(baseline_json: str, aissd_json: str, model_name: str):
     cand_bytes = a.get("candidate_k_bytes_to_host", 0)
     cand_str = f"{cand_bytes} B (Zero-Bus)" if cand_bytes == 0 else f"{cand_bytes} B"
     print(f"{'Candidate K to Host Bus':<32} | {'0 B (Host RAM)':>20} | {cand_str:>20}")
-
-    b_tps = b.get("tokens_per_second", 0)
-    a_tps = a.get("tokens_per_second", 0)
-    print(f"{'Decode Throughput':<32} | {b_tps:>15.2f} tok/s | {a_tps:>14.2f} tok/s")
-    print(f"{'Decode Wall Time':<32} | {b.get('wall_time_s', 0):>17.3f} s  | {a.get('wall_time_s', 0):>16.3f} s")
     print("=" * 80)
 
     # Verification
