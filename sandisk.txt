@@ -11,7 +11,7 @@ python scripts/run_quick_comparison.py
 source ~/.venvs/ai-ssd/bin/activate
 
 python scripts/run_quick_comparison.py --model Qwen/Qwen3-2B --context 2048
-python scripts/run_quick_comparison.py --model Qwen/Qwen3-2B --context 2048 --storage-mode file
+python scripts/run_quick_comparison.py --model Qwen/Qwen2.5-0.5B --context 2048 --storage-mode file
 python scripts/run_quick_comparison.py --model Qwen/Qwen3-2B --context 16384 --storage-mode file
 
 
